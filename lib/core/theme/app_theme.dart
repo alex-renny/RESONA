@@ -158,3 +158,26 @@ class AppTheme {
     );
   }
 }
+
+/// Custom scroll behavior that replaces Android's aggressive stretch overscroll
+/// with a subtle glowing edge indicator and clean clamping physics so the UI
+/// does not over-stretch when reaching the scroll boundaries.
+class ResonaScrollBehavior extends MaterialScrollBehavior {
+  const ResonaScrollBehavior();
+
+  @override
+  Widget buildOverscrollIndicator(
+      BuildContext context, Widget child, ScrollableDetails details) {
+    return GlowingOverscrollIndicator(
+      axisDirection: details.direction,
+      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+      child: child,
+    );
+  }
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    return const ClampingScrollPhysics();
+  }
+}
+

@@ -25,6 +25,7 @@ class ResonaApp extends ConsumerWidget {
     return MaterialApp(
       title: 'RESONA',
       debugShowCheckedModeBanner: false,
+      scrollBehavior: const ResonaScrollBehavior(),
       theme: AppTheme.build(
         palette: palette,
         accent: settings.accent,
