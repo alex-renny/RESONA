@@ -110,6 +110,58 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     state = EditorState(project: project, isDirty: true, canUndo: false, canRedo: false);
   }
 
+  /// Opens a newly merged audio file in the timeline editor for further editing.
+  /// Automatically creates an [AudioProject] containing the merged audio clip,
+  /// loads it into the timeline, and flags the project for editing.
+  Future<void> openMergedFile(String filePath, {String projectName = 'Auto Merge Project'}) async {
+    Duration? duration;
+    final probe = AudioPlayer();
+    try {
+      duration = await probe.setFilePath(filePath);
+    } catch (_) {
+      duration = null;
+    } finally {
+      await probe.dispose();
+    }
+
+    final now = DateTime.now();
+    final clipDuration = duration ?? const Duration(seconds: 30);
+    final clipName = filePath.split(RegExp(r'[\\/]')).last;
+
+    final clip = AudioClip(
+      id: IdGenerator.next(),
+      sourcePath: filePath,
+      name: clipName,
+      startTime: Duration.zero,
+      endTime: clipDuration,
+      timelinePosition: Duration.zero,
+    );
+
+    final track = AudioTrack(
+      id: IdGenerator.next(),
+      name: 'Merged Audio Track',
+      clips: [clip],
+    );
+
+    final project = AudioProject(
+      id: IdGenerator.next(),
+      name: projectName,
+      createdAt: now,
+      modifiedAt: now,
+      tracks: [track],
+    );
+
+    _history = UndoHistory(current: project);
+    state = EditorState(
+      project: project,
+      selectedTrackId: track.id,
+      selectedClipId: clip.id,
+      isDirty: true,
+      canUndo: false,
+      canRedo: false,
+    );
+  }
+
   void close() {
     _history = null;
     state = null;

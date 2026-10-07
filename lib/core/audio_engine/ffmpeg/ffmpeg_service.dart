@@ -132,11 +132,11 @@ class FfmpegService {
     required Duration endTime,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     final duration = endTime - startTime;
     if (duration <= Duration.zero) {
-      return FfmpegResult.failure('End time must be after start time.');
+      return const FfmpegResult.failure('End time must be after start time.');
     }
 
     final args = [
@@ -161,8 +161,8 @@ class FfmpegService {
     required String outputPath,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
-    if (inputPaths.isEmpty) return FfmpegResult.failure('No input files given.');
+    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (inputPaths.isEmpty) return const FfmpegResult.failure('No input files given.');
 
     // Write a temporary concat list file.
     final listFile = File(p.join(
@@ -198,7 +198,7 @@ class FfmpegService {
     Duration? totalDuration,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     // Build the `afade` filter chain.
     final filters = <String>[];
@@ -211,7 +211,7 @@ class FfmpegService {
     if (fadeOut > Duration.zero) {
       final dur = totalDuration ?? await probeDuration(inputPath);
       if (dur == null) {
-        return FfmpegResult.failure(
+        return const FfmpegResult.failure(
             'Cannot determine file duration for fade-out calculation.');
       }
       final st = (dur - fadeOut).inMilliseconds / 1000.0;
@@ -251,8 +251,8 @@ class FfmpegService {
     Duration crossfadeDuration = const Duration(seconds: 1),
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
-    if (clips.isEmpty) return FfmpegResult.failure('No clips provided.');
+    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (clips.isEmpty) return const FfmpegResult.failure('No clips provided.');
 
     // Single clip — just cut + fade, no complex filter needed.
     if (clips.length == 1) {
@@ -409,7 +409,7 @@ class FfmpegService {
     int? channels,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     final args = <String>[
       '-y',
@@ -431,7 +431,7 @@ class FfmpegService {
     required String outputPath,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     final args = [
       '-y',
@@ -488,7 +488,7 @@ class FfmpegService {
     double treble = 0,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     // Build an `equalizer` filter chain for each non-zero band.
     final filters = <String>[];
@@ -522,7 +522,7 @@ class FfmpegService {
     required String outputPath,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     const filter = 'loudnorm=I=-23:TP=-2:LRA=7';
     final args = [
@@ -550,10 +550,10 @@ class FfmpegService {
     bool preservePitch = true,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (exe == null) return const FfmpegResult.failure(_notFound);
 
     if (speed <= 0) {
-      return FfmpegResult.failure('Speed must be a positive number.');
+      return const FfmpegResult.failure('Speed must be a positive number.');
     }
 
     String filterStr;

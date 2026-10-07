@@ -5,18 +5,18 @@ import 'package:resona/features/auto_merge/domain/auto_merge_validator.dart';
 void main() {
   group('AutoMergeValidator', () {
     test('validates correct item', () {
-      final item = AutoMergeItem(
+      const item = AutoMergeItem(
         id: '1',
         sourcePath: '/path/audio.mp3',
         name: 'audio.mp3',
-        sourceDuration: const Duration(minutes: 5),
-        startTime: const Duration(seconds: 30),
-        endTime: const Duration(minutes: 3),
+        sourceDuration: Duration(minutes: 5),
+        startTime: Duration(seconds: 30),
+        endTime: Duration(minutes: 3),
         position: 1,
-        fadeIn: const Duration(seconds: 2),
-        fadeOut: const Duration(seconds: 2),
+        fadeIn: Duration(seconds: 2),
+        fadeOut: Duration(seconds: 2),
         transition: TransitionType.crossfade,
-        crossfadeDuration: const Duration(seconds: 1),
+        crossfadeDuration: Duration(seconds: 1),
       );
 
       final result = AutoMergeValidator.validateItem(item);
@@ -25,13 +25,13 @@ void main() {
     });
 
     test('detects start time after end time', () {
-      final item = AutoMergeItem(
+      const item = AutoMergeItem(
         id: '1',
         sourcePath: '/path/audio.mp3',
         name: 'audio.mp3',
-        sourceDuration: const Duration(minutes: 5),
-        startTime: const Duration(minutes: 4),
-        endTime: const Duration(minutes: 2),
+        sourceDuration: Duration(minutes: 5),
+        startTime: Duration(minutes: 4),
+        endTime: Duration(minutes: 2),
         position: 1,
       );
 
@@ -41,13 +41,13 @@ void main() {
     });
 
     test('detects end time exceeding source duration', () {
-      final item = AutoMergeItem(
+      const item = AutoMergeItem(
         id: '1',
         sourcePath: '/path/audio.mp3',
         name: 'audio.mp3',
-        sourceDuration: const Duration(minutes: 2),
+        sourceDuration: Duration(minutes: 2),
         startTime: Duration.zero,
-        endTime: const Duration(minutes: 5),
+        endTime: Duration(minutes: 5),
         position: 1,
       );
 

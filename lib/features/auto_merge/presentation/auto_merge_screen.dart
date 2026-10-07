@@ -1,15 +1,17 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../core/theme/spacing.dart';
 import '../../../core/widgets/resona_card.dart';
 import '../../../core/widgets/resona_empty_state.dart';
+import '../../editor/application/editor_project_provider.dart';
+import '../../editor/presentation/export_dialog.dart';
 import '../../editor/presentation/timeline/editor_toolbar.dart'
     show kSupportedAudioExtensions;
+import '../../navigation/application/shell_tab_provider.dart';
 import '../application/auto_merge_provider.dart';
 import '../domain/auto_merge_models.dart';
 import '../domain/auto_merge_validator.dart';
@@ -83,13 +85,18 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
   }
 
   Future<void> _buildMerge() async {
-    // Use a simple directory picker via FilePicker or fall back to a Downloads
-    // path. On desktop we can pick a save directory.
-    String? dir = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Choose output folder',
-    );
-    if (dir == null || !mounted) return;
-    await ref.read(autoMergeProvider.notifier).buildMerge(dir);
+    final tempDir = await getTemporaryDirectory();
+    if (!mounted) return;
+    final notifier = ref.read(autoMergeProvider.notifier);
+    await notifier.buildMerge(tempDir.path);
+    if (!mounted) return;
+    final state = ref.read(autoMergeProvider);
+    if (state.outputPath != null) {
+      await ref
+          .read(editorProjectProvider.notifier)
+          .openMergedFile(state.outputPath!, projectName: 'Auto Merge');
+      ref.read(appShellTabIndexProvider.notifier).state = kEditorTabIndex;
+    }
   }
 
   void _applyGlobalTransition() {
@@ -174,7 +181,7 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
 
                 // ── Empty state ─────────────────────────────────────────
                 if (state.items.isEmpty) ...[
-                  ResonaEmptyState(
+                  const ResonaEmptyState(
                     icon: Icons.merge_type,
                     title: 'No audio files added yet',
                     message:
@@ -864,7 +871,7 @@ class _BuildProgressCard extends StatelessWidget {
   }
 }
 
-class _SuccessCard extends StatelessWidget {
+class _SuccessCard extends ConsumerWidget {
   final String outputPath;
   final VoidCallback onNewMerge;
 
@@ -874,7 +881,7 @@ class _SuccessCard extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final fileName = outputPath.split(RegExp(r'[\\/]')).last;
 
@@ -913,20 +920,32 @@ class _SuccessCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: ResonaSpacing.lg),
-          Row(
+          Wrap(
+            spacing: ResonaSpacing.md,
+            runSpacing: ResonaSpacing.sm,
             children: [
+              FilledButton.icon(
+                onPressed: () async {
+                  await ref
+                      .read(editorProjectProvider.notifier)
+                      .openMergedFile(outputPath, projectName: 'Auto Merge');
+                  ref.read(appShellTabIndexProvider.notifier).state =
+                      kEditorTabIndex;
+                },
+                icon: const Icon(Icons.tune),
+                label: const Text('Edit in Timeline'),
+              ),
               OutlinedButton.icon(
                 onPressed: () {
-                  // Open the parent directory in the system file manager.
-                  final dir = File(outputPath).parent.path;
-                  // ignore: deprecated_member_use
-                  Process.run('explorer', [dir], runInShell: true);
+                  final editorState = ref.read(editorProjectProvider);
+                  if (editorState != null) {
+                    ExportDialog.show(context, editorState.project);
+                  }
                 },
-                icon: const Icon(Icons.folder_open_outlined),
-                label: const Text('Open Folder'),
+                icon: const Icon(Icons.download_outlined),
+                label: const Text('Save / Export'),
               ),
-              const SizedBox(width: ResonaSpacing.md),
-              FilledButton.icon(
+              TextButton.icon(
                 onPressed: onNewMerge,
                 icon: const Icon(Icons.add),
                 label: const Text('New Merge'),

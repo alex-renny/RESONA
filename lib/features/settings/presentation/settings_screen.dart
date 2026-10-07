@@ -51,39 +51,39 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── Appearance ───────────────────────────────────────────────────
-          _SectionHeader('Appearance', icon: Icons.palette_outlined),
+          const _SectionHeader('Appearance', icon: Icons.palette_outlined),
           _AppearanceThemeCard(settings: settings, notifier: notifier),
           const SizedBox(height: ResonaSpacing.md),
           _AppearanceInterfaceCard(settings: settings, notifier: notifier),
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── Editor ───────────────────────────────────────────────────────
-          _SectionHeader('Editor', icon: Icons.tune_outlined),
+          const _SectionHeader('Editor', icon: Icons.tune_outlined),
           _EditorCard(settings: settings, notifier: notifier),
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── Audio ────────────────────────────────────────────────────────
-          _SectionHeader('Audio', icon: Icons.graphic_eq_outlined),
+          const _SectionHeader('Audio', icon: Icons.graphic_eq_outlined),
           _AudioCard(settings: settings, notifier: notifier),
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── Projects ─────────────────────────────────────────────────────
-          _SectionHeader('Projects', icon: Icons.folder_outlined),
+          const _SectionHeader('Projects', icon: Icons.folder_outlined),
           _ProjectsCard(settings: settings, notifier: notifier),
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── Keyboard Shortcuts ───────────────────────────────────────────
-          _SectionHeader('Keyboard Shortcuts', icon: Icons.keyboard_outlined),
+          const _SectionHeader('Keyboard Shortcuts', icon: Icons.keyboard_outlined),
           const _KeyboardShortcutsCard(),
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── Accessibility ────────────────────────────────────────────────
-          _SectionHeader('Accessibility', icon: Icons.accessibility_new_outlined),
+          const _SectionHeader('Accessibility', icon: Icons.accessibility_new_outlined),
           _AccessibilityCard(settings: settings, notifier: notifier),
           const SizedBox(height: ResonaSpacing.xl),
 
           // ── About ────────────────────────────────────────────────────────
-          _SectionHeader('About', icon: Icons.info_outline),
+          const _SectionHeader('About', icon: Icons.info_outline),
           const _AboutCard(),
           const SizedBox(height: ResonaSpacing.xl),
         ],
@@ -104,7 +104,7 @@ class _AppearanceThemeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _SettingsCard(children: [
-      _RowLabel('Theme'),
+      const _RowLabel('Theme'),
       SegmentedButton<ResonaThemeMode>(
         segments: const [
           ButtonSegment(
@@ -128,7 +128,7 @@ class _AppearanceThemeCard extends StatelessWidget {
             notifier.update((c) => c.copyWith(themeMode: s.first)),
       ),
       const SizedBox(height: ResonaSpacing.lg),
-      _RowLabel('Accent color'),
+      const _RowLabel('Accent color'),
       Wrap(
         spacing: ResonaSpacing.sm,
         children: [
@@ -156,7 +156,7 @@ class _AppearanceInterfaceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _SettingsCard(children: [
-      _RowLabel('Interface'),
+      const _RowLabel('Interface'),
       _LabeledSlider(
         label: 'UI density',
         value: UiDensity.values.indexOf(settings.density).toDouble(),
@@ -195,7 +195,7 @@ class _AppearanceInterfaceCard extends StatelessWidget {
         onChanged: (v) => notifier.update((c) => c.copyWith(fontScale: v)),
       ),
       const SizedBox(height: ResonaSpacing.sm),
-      _RowLabel('Animation'),
+      const _RowLabel('Animation'),
       SegmentedButton<AnimationLevel>(
         segments: const [
           ButtonSegment(value: AnimationLevel.full, label: Text('Full')),
@@ -726,13 +726,13 @@ class _AboutCard extends StatelessWidget {
                   style: theme.textTheme.bodyMedium,
                 ),
                 const SizedBox(height: ResonaSpacing.lg),
-                _AboutInfoRow(
+                const _AboutInfoRow(
                   icon: Icons.lock_outline,
                   text:
                       'RESONA processes all audio locally. No files are uploaded to any server.',
                 ),
                 const SizedBox(height: ResonaSpacing.md),
-                _AboutInfoRow(
+                const _AboutInfoRow(
                   icon: Icons.code_outlined,
                   text:
                       'Built with Flutter, powered by FFmpeg.',
