@@ -22,9 +22,12 @@ class ProjectRepository {
 
   Future<List<AudioProject>> listAll() async {
     final box = await _box();
-    final projects = box.values
-        .map((raw) {
+    final projects = box.keys
+        .where((key) => key != _recoveryKey)
+        .map((key) {
           try {
+            final raw = box.get(key);
+            if (raw == null) return null;
             return AudioProject.fromJson(jsonDecode(raw) as Map<String, dynamic>);
           } catch (_) {
             return null;
@@ -52,5 +55,28 @@ class ProjectRepository {
     final project = await load(id);
     if (project == null) return;
     await save(project.copyWith(name: newName, modifiedAt: DateTime.now()));
+  }
+
+  static const _recoveryKey = 'resona_recovery_snapshot';
+
+  Future<void> saveRecovery(AudioProject project) async {
+    final box = await _box();
+    await box.put(_recoveryKey, jsonEncode(project.toJson()));
+  }
+
+  Future<AudioProject?> loadRecovery() async {
+    final box = await _box();
+    final raw = box.get(_recoveryKey);
+    if (raw == null) return null;
+    try {
+      return AudioProject.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearRecovery() async {
+    final box = await _box();
+    await box.delete(_recoveryKey);
   }
 }

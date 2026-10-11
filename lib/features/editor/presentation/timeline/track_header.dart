@@ -14,7 +14,11 @@ class TrackHeader extends ConsumerWidget {
   final double height;
   final ResonaPalette palette;
 
-  const TrackHeader({super.key, required this.track, required this.height, required this.palette});
+  const TrackHeader(
+      {super.key,
+      required this.track,
+      required this.height,
+      required this.palette});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -23,7 +27,8 @@ class TrackHeader extends ConsumerWidget {
 
     return Container(
       height: height,
-      padding: const EdgeInsets.symmetric(horizontal: ResonaSpacing.sm, vertical: ResonaSpacing.xs),
+      padding: const EdgeInsets.symmetric(
+          horizontal: ResonaSpacing.sm, vertical: ResonaSpacing.xs),
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(color: palette.border),
@@ -48,7 +53,8 @@ class TrackHeader extends ConsumerWidget {
                 ),
               ),
               IconButton(
-                icon: Icon(track.locked ? Icons.lock : Icons.lock_open, size: 16),
+                icon:
+                    Icon(track.locked ? Icons.lock : Icons.lock_open, size: 16),
                 onPressed: () => notifier.toggleLock(track.id),
                 tooltip: track.locked ? 'Unlock track' : 'Lock track',
                 padding: EdgeInsets.zero,
@@ -65,6 +71,7 @@ class TrackHeader extends ConsumerWidget {
             ],
           ),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _MiniToggle(
                 label: 'M',
@@ -81,11 +88,25 @@ class TrackHeader extends ConsumerWidget {
               ),
               const SizedBox(width: ResonaSpacing.sm),
               Expanded(
-                child: Slider(
-                  value: track.volume.clamp(0.0, 2.0),
-                  min: 0,
-                  max: 2,
-                  onChanged: track.locked ? null : (v) => notifier.setTrackVolume(track.id, v),
+                child: SizedBox(
+                  height: 24,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 2,
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 7),
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 12),
+                    ),
+                    child: Slider(
+                      value: track.volume.clamp(0.0, 2.0),
+                      min: 0,
+                      max: 2,
+                      onChanged: track.locked
+                          ? null
+                          : (v) => notifier.setTrackVolume(track.id, v),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -103,8 +124,11 @@ class TrackHeader extends ConsumerWidget {
         title: const Text('Rename track'),
         content: TextField(controller: controller, autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Save')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, controller.text),
+              child: const Text('Save')),
         ],
       ),
     );
@@ -137,8 +161,10 @@ class _MiniToggle extends StatelessWidget {
         height: 22,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: active ? activeColor.withValues(alpha: 0.2) : Colors.transparent,
-          border: Border.all(color: active ? activeColor : Theme.of(context).dividerColor),
+          color:
+              active ? activeColor.withValues(alpha: 0.2) : Colors.transparent,
+          border: Border.all(
+              color: active ? activeColor : Theme.of(context).dividerColor),
           borderRadius: BorderRadius.circular(4),
         ),
         child: Text(

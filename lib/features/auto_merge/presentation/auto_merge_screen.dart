@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
-
+import 'package:just_audio/just_audio.dart';
+import 'package:path/path.dart' as p;
+import '../../../core/audio_engine/media_store.dart';
 import '../../../core/theme/spacing.dart';
 import '../../../core/widgets/resona_card.dart';
 import '../../../core/widgets/resona_empty_state.dart';
@@ -12,6 +15,7 @@ import '../../editor/presentation/export_dialog.dart';
 import '../../editor/presentation/timeline/editor_toolbar.dart'
     show kSupportedAudioExtensions;
 import '../../navigation/application/shell_tab_provider.dart';
+import '../../player/application/audio_player_service.dart';
 import '../application/auto_merge_provider.dart';
 import '../domain/auto_merge_models.dart';
 import '../domain/auto_merge_validator.dart';
@@ -77,26 +81,28 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
     for (final file in result.files) {
       final path = file.path;
       if (path == null) continue;
-      final duration = await probeDuration(path);
+      final stored =
+          await MediaStore.persistCopy(path, preferredName: file.name);
+      final duration = await probeDuration(stored);
       if (!mounted) break;
-      notifier.addItem(path, duration);
+      if (duration == null || duration <= Duration.zero) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Could not read audio duration for ${file.name}.')),
+        );
+        continue;
+      }
+      notifier.addItem(stored, duration);
     }
     if (mounted) setState(() => _isImporting = false);
   }
 
   Future<void> _buildMerge() async {
-    final tempDir = await getTemporaryDirectory();
+    final exportDir = await MediaStore.exportsDir();
     if (!mounted) return;
     final notifier = ref.read(autoMergeProvider.notifier);
-    await notifier.buildMerge(tempDir.path);
+    await notifier.buildMerge(exportDir.path);
     if (!mounted) return;
-    final state = ref.read(autoMergeProvider);
-    if (state.outputPath != null) {
-      await ref
-          .read(editorProjectProvider.notifier)
-          .openMergedFile(state.outputPath!, projectName: 'Auto Merge');
-      ref.read(appShellTabIndexProvider.notifier).state = kEditorTabIndex;
-    }
   }
 
   void _applyGlobalTransition() {
@@ -169,13 +175,21 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
                           ? const SizedBox(
                               width: 16,
                               height: 16,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.add),
-                      label: const Text('Add Audio Files'),
+                      label: Text(
+                          state.items.isEmpty ? 'Add Audio' : 'Add More Audio'),
                     ),
                   ],
+                ),
+                const SizedBox(height: ResonaSpacing.sm),
+                Text(
+                  'Add one or more clips. Expand a clip to set its in/out times, '
+                  'position, and fades. The queue order is the merge order.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
+                  ),
                 ),
                 const SizedBox(height: ResonaSpacing.xl),
 
@@ -184,8 +198,7 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
                   const ResonaEmptyState(
                     icon: Icons.merge_type,
                     title: 'No audio files added yet',
-                    message:
-                        'Tap "Add Audio Files" to build your merge queue.',
+                    message: 'Tap "Add Audio Files" to build your merge queue.',
                   ),
                   const SizedBox(height: ResonaSpacing.xl),
                 ],
@@ -200,7 +213,7 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
                     physics: const NeverScrollableScrollPhysics(),
                     buildDefaultDragHandles: false,
                     itemCount: state.items.length,
-                    onReorder: (oldIndex, newIndex) {
+                    onReorderItem: (oldIndex, newIndex) {
                       ref
                           .read(autoMergeProvider.notifier)
                           .reorderItems(oldIndex, newIndex);
@@ -214,6 +227,17 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
                         isProcessing: state.isProcessing,
                       );
                     },
+                  ),
+                  const SizedBox(height: ResonaSpacing.sm),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: state.isProcessing || _isImporting
+                          ? null
+                          : _pickFiles,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add Another Audio'),
+                    ),
                   ),
                   const SizedBox(height: ResonaSpacing.xl),
                 ],
@@ -233,35 +257,66 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
                                   .withValues(alpha: 0.6),
                             )),
                         const SizedBox(height: ResonaSpacing.md),
-                        SegmentedButton<TransitionType>(
-                          segments: const [
-                            ButtonSegment(
-                              value: TransitionType.hardCut,
-                              label: Text('Hard Cut'),
-                              icon: Icon(Icons.cut),
-                            ),
-                            ButtonSegment(
-                              value: TransitionType.crossfade,
-                              label: Text('Crossfade'),
-                              icon: Icon(Icons.swap_horiz),
-                            ),
-                            ButtonSegment(
-                              value: TransitionType.fadeThroughSilence,
-                              label: Text('Fade Through Silence'),
-                              icon: Icon(Icons.waves),
-                            ),
-                          ],
-                          selected: {_globalTransition},
-                          onSelectionChanged: state.isProcessing
-                              ? null
-                              : (s) {
-                                  setState(
-                                      () => _globalTransition = s.first);
-                                  _applyGlobalTransition();
-                                },
-                        ),
-                        if (_globalTransition ==
-                            TransitionType.crossfade) ...[
+                        if (MediaQuery.sizeOf(context).width < 600)
+                          Wrap(
+                            spacing: ResonaSpacing.sm,
+                            children: [
+                              for (final option in [
+                                (TransitionType.hardCut, 'Hard Cut', Icons.cut),
+                                (
+                                  TransitionType.crossfade,
+                                  'Crossfade',
+                                  Icons.swap_horiz
+                                ),
+                                (
+                                  TransitionType.fadeThroughSilence,
+                                  'Fade Through Silence',
+                                  Icons.waves
+                                ),
+                              ])
+                                ChoiceChip(
+                                  avatar: Icon(option.$3, size: 16),
+                                  label: Text(option.$2),
+                                  selected: _globalTransition == option.$1,
+                                  onSelected: state.isProcessing
+                                      ? null
+                                      : (selected) {
+                                          if (!selected) return;
+                                          setState(() =>
+                                              _globalTransition = option.$1);
+                                          _applyGlobalTransition();
+                                        },
+                                ),
+                            ],
+                          )
+                        else
+                          SegmentedButton<TransitionType>(
+                            segments: const [
+                              ButtonSegment(
+                                value: TransitionType.hardCut,
+                                label: Text('Hard Cut'),
+                                icon: Icon(Icons.cut),
+                              ),
+                              ButtonSegment(
+                                value: TransitionType.crossfade,
+                                label: Text('Crossfade'),
+                                icon: Icon(Icons.swap_horiz),
+                              ),
+                              ButtonSegment(
+                                value: TransitionType.fadeThroughSilence,
+                                label: Text('Fade Through Silence'),
+                                icon: Icon(Icons.waves),
+                              ),
+                            ],
+                            selected: {_globalTransition},
+                            onSelectionChanged: state.isProcessing
+                                ? null
+                                : (s) {
+                                    setState(() => _globalTransition = s.first);
+                                    _applyGlobalTransition();
+                                  },
+                          ),
+                        if (_globalTransition == TransitionType.crossfade) ...[
                           const SizedBox(height: ResonaSpacing.md),
                           Row(
                             children: [
@@ -281,8 +336,7 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
                                   onChanged: state.isProcessing
                                       ? null
                                       : (v) {
-                                          setState(
-                                              () => _crossfadeSeconds = v);
+                                          setState(() => _crossfadeSeconds = v);
                                           _applyGlobalTransition();
                                         },
                                 ),
@@ -359,12 +413,13 @@ class _AutoMergeItemCard extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<_AutoMergeItemCard> createState() =>
-      _AutoMergeItemCardState();
+  ConsumerState<_AutoMergeItemCard> createState() => _AutoMergeItemCardState();
 }
 
 class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
   bool _expanded = false;
+  bool _isPreviewing = false;
+  StreamSubscription<PlayerState>? _previewStateSubscription;
 
   late final TextEditingController _startCtrl;
   late final TextEditingController _endCtrl;
@@ -401,15 +456,44 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
     _customFadeOutCtrl = TextEditingController(
       text: AutoMergeValidator.formatTime(item.fadeOut),
     );
+    _previewStateSubscription =
+        ref.read(audioPlayerServiceProvider).playerStateStream.listen((state) {
+      if (!mounted) return;
+      final player = ref.read(audioPlayerServiceProvider);
+      setState(() {
+        _isPreviewing =
+            state.playing && player.currentSourcePath == widget.item.sourcePath;
+      });
+    });
   }
 
   @override
   void dispose() {
+    _previewStateSubscription?.cancel();
     _startCtrl.dispose();
     _endCtrl.dispose();
     _customFadeInCtrl.dispose();
     _customFadeOutCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _toggleSourcePreview() async {
+    final player = ref.read(audioPlayerServiceProvider);
+    try {
+      if (_isPreviewing && player.currentSourcePath == widget.item.sourcePath) {
+        await player.pause();
+        return;
+      }
+      await player.loadFile(widget.item.sourcePath);
+      final start = widget.item.startTime;
+      await player.seek(start);
+      await player.play();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not play ${widget.item.name}: $error')),
+      );
+    }
   }
 
   void _commitStart(String value) {
@@ -427,6 +511,18 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
     _applyUpdate(widget.item.copyWith(startTime: parsed));
   }
 
+  void _updateStartWhileTyping(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      _applyUpdate(widget.item.copyWith(startTime: Duration.zero));
+      return;
+    }
+    final parsed = AutoMergeValidator.parseTime(trimmed);
+    if (parsed != null) {
+      _applyUpdate(widget.item.copyWith(startTime: parsed));
+    }
+  }
+
   void _commitEnd(String value) {
     if (value.trim().isEmpty) {
       _applyUpdate(widget.item.copyWith(endTime: Duration.zero));
@@ -440,6 +536,18 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
     }
     setState(() => _endError = null);
     _applyUpdate(widget.item.copyWith(endTime: parsed));
+  }
+
+  void _updateEndWhileTyping(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      _applyUpdate(widget.item.copyWith(endTime: Duration.zero));
+      return;
+    }
+    final parsed = AutoMergeValidator.parseTime(trimmed);
+    if (parsed != null) {
+      _applyUpdate(widget.item.copyWith(endTime: parsed));
+    }
   }
 
   void _applyUpdate(AutoMergeItem updated) {
@@ -495,6 +603,7 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final item = widget.item;
+    final itemCount = ref.watch(autoMergeProvider).items.length;
     final validation = AutoMergeValidator.validateItem(item);
 
     final durationText = item.sourceDuration != null
@@ -577,7 +686,29 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
                                   .withValues(alpha: 0.5),
                             ),
                           ),
+                          Text(
+                            'In ${AutoMergeValidator.formatTime(item.startTime)}  ·  '
+                            'Out ${item.endTime == Duration.zero ? 'End' : AutoMergeValidator.formatTime(item.endTime)}  ·  '
+                            'Fades ${AutoMergeValidator.formatTime(item.fadeIn)}/${AutoMergeValidator.formatTime(item.fadeOut)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.58),
+                            ),
+                          ),
                         ],
+                      ),
+                    ),
+
+                    IconButton(
+                      tooltip: _isPreviewing ? 'Pause audio' : 'Play audio',
+                      visualDensity: VisualDensity.compact,
+                      onPressed:
+                          widget.isProcessing ? null : _toggleSourcePreview,
+                      icon: Icon(
+                        _isPreviewing ? Icons.pause_circle : Icons.play_circle,
+                        color: theme.colorScheme.primary,
                       ),
                     ),
 
@@ -597,11 +728,8 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
 
                     // Expand chevron
                     Icon(
-                      _expanded
-                          ? Icons.expand_less
-                          : Icons.expand_more,
-                      color: theme.colorScheme.onSurface
-                          .withValues(alpha: 0.5),
+                      _expanded ? Icons.expand_less : Icons.expand_more,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                     ),
                   ],
                 ),
@@ -616,27 +744,58 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    DropdownButtonFormField<int>(
+                      initialValue: item.position,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Merge position',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: [
+                        for (var position = 1;
+                            position <= itemCount;
+                            position++)
+                          DropdownMenuItem(
+                            value: position,
+                            child: Text(
+                                '${_ordinal(position)} in the merged audio'),
+                          ),
+                      ],
+                      onChanged: widget.isProcessing
+                          ? null
+                          : (position) {
+                              if (position == null) return;
+                              ref.read(autoMergeProvider.notifier).reorderItems(
+                                    widget.index,
+                                    position - 1,
+                                  );
+                            },
+                    ),
+                    const SizedBox(height: ResonaSpacing.md),
                     // In/out point row
                     Row(
                       children: [
                         Expanded(
                           child: _TimeField(
-                            label: 'Start time',
+                            label: 'Start time (MM:SS)',
                             hint: '00:00',
                             controller: _startCtrl,
                             error: _startError,
                             enabled: !widget.isProcessing,
+                            onChanged: _updateStartWhileTyping,
                             onSubmitted: _commitStart,
                           ),
                         ),
                         const SizedBox(width: ResonaSpacing.md),
                         Expanded(
                           child: _TimeField(
-                            label: 'End time',
+                            label: 'End time (MM:SS)',
                             hint: 'Source end',
                             controller: _endCtrl,
                             error: _endError,
                             enabled: !widget.isProcessing,
+                            onChanged: _updateEndWhileTyping,
                             onSubmitted: _commitEnd,
                           ),
                         ),
@@ -696,8 +855,7 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
                       const SizedBox(height: ResonaSpacing.sm),
                       ...validation.errors.map(
                         (e) => Padding(
-                          padding: const EdgeInsets.only(
-                              top: ResonaSpacing.xs),
+                          padding: const EdgeInsets.only(top: ResonaSpacing.xs),
                           child: Text(
                             e,
                             style: theme.textTheme.labelSmall?.copyWith(
@@ -754,6 +912,7 @@ class _TimeField extends StatelessWidget {
   final TextEditingController controller;
   final String? error;
   final bool enabled;
+  final ValueChanged<String>? onChanged;
   final ValueChanged<String> onSubmitted;
 
   const _TimeField({
@@ -762,6 +921,7 @@ class _TimeField extends StatelessWidget {
     required this.controller,
     this.error,
     required this.enabled,
+    this.onChanged,
     required this.onSubmitted,
   });
 
@@ -781,6 +941,7 @@ class _TimeField extends StatelessWidget {
         isDense: true,
         border: const OutlineInputBorder(),
       ),
+      onChanged: onChanged,
       onSubmitted: onSubmitted,
       onEditingComplete: () => onSubmitted(controller.text),
     );
@@ -849,7 +1010,9 @@ class _BuildProgressCard extends StatelessWidget {
                 ),
               ),
               Text(
-                '${(progress * 100).toStringAsFixed(0)}%',
+                progress > 0
+                    ? '${(progress * 100).toStringAsFixed(0)}%'
+                    : 'Processing',
                 style: theme.textTheme.labelMedium?.copyWith(
                   color: theme.colorScheme.primary,
                   fontWeight: FontWeight.bold,
@@ -861,7 +1024,7 @@ class _BuildProgressCard extends StatelessWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
-              value: progress,
+              value: progress > 0 ? progress : null,
               minHeight: 6,
             ),
           ),
@@ -871,7 +1034,7 @@ class _BuildProgressCard extends StatelessWidget {
   }
 }
 
-class _SuccessCard extends ConsumerWidget {
+class _SuccessCard extends ConsumerStatefulWidget {
   final String outputPath;
   final VoidCallback onNewMerge;
 
@@ -881,7 +1044,47 @@ class _SuccessCard extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_SuccessCard> createState() => _SuccessCardState();
+}
+
+class _SuccessCardState extends ConsumerState<_SuccessCard> {
+  bool _isPlaying = false;
+  StreamSubscription<PlayerState>? _playerSubscription;
+
+  @override
+  void dispose() {
+    _playerSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _togglePreview() async {
+    final player = ref.read(audioPlayerServiceProvider);
+    try {
+      if (_isPlaying) {
+        await player.pause();
+        if (mounted) setState(() => _isPlaying = false);
+        return;
+      }
+      await player.loadFile(widget.outputPath);
+      _playerSubscription?.cancel();
+      _playerSubscription = player.playerStateStream.listen((state) {
+        if (!mounted) return;
+        setState(() => _isPlaying =
+            state.playing && player.currentSourcePath == widget.outputPath);
+      });
+      await player.play();
+      if (mounted) setState(() => _isPlaying = true);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not play the merged audio.')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final outputPath = widget.outputPath;
     final theme = Theme.of(context);
     final fileName = outputPath.split(RegExp(r'[\\/]')).last;
 
@@ -903,50 +1106,39 @@ class _SuccessCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: ResonaSpacing.md),
-          Text(
-            fileName,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w500,
-            ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-          Text(
-            outputPath,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          Text(fileName,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w500),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis),
+          Text(outputPath,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis),
           const SizedBox(height: ResonaSpacing.lg),
           Wrap(
             spacing: ResonaSpacing.md,
             runSpacing: ResonaSpacing.sm,
             children: [
               FilledButton.icon(
-                onPressed: () async {
-                  await ref
-                      .read(editorProjectProvider.notifier)
-                      .openMergedFile(outputPath, projectName: 'Auto Merge');
-                  ref.read(appShellTabIndexProvider.notifier).state =
-                      kEditorTabIndex;
-                },
+                onPressed: _togglePreview,
+                icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                label: Text(_isPlaying ? 'Pause Preview' : 'Play Preview'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _openInEditor,
                 icon: const Icon(Icons.tune),
                 label: const Text('Edit in Timeline'),
               ),
               OutlinedButton.icon(
-                onPressed: () {
-                  final editorState = ref.read(editorProjectProvider);
-                  if (editorState != null) {
-                    ExportDialog.show(context, editorState.project);
-                  }
-                },
+                onPressed: _exportMergedAudio,
                 icon: const Icon(Icons.download_outlined),
                 label: const Text('Save / Export'),
               ),
               TextButton.icon(
-                onPressed: onNewMerge,
+                onPressed: widget.onNewMerge,
                 icon: const Icon(Icons.add),
                 label: const Text('New Merge'),
               ),
@@ -955,6 +1147,50 @@ class _SuccessCard extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _exportMergedAudio() async {
+    try {
+      // ExportDialog encodes an AudioProject. Auto Merge does not necessarily
+      // have an editor project loaded, so first create one from this exact
+      // rendered file instead of silently doing nothing when editor state is
+      // null (or exporting an unrelated project that was already open).
+      await ref.read(editorProjectProvider.notifier).openMergedFile(
+            widget.outputPath,
+            projectName: 'Auto Merge - ${p.basenameWithoutExtension(widget.outputPath)}',
+          );
+      if (!mounted) return;
+      final editorState = ref.read(editorProjectProvider);
+      if (editorState == null) {
+        throw StateError('Could not prepare the merged audio for export.');
+      }
+      await ExportDialog.show(context, editorState.project);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open export: $error')),
+      );
+    }
+  }
+
+  Future<void> _openInEditor() async {
+    try {
+      await ref
+          .read(editorProjectProvider.notifier)
+          .openMergedFile(widget.outputPath, projectName: 'Auto Merge');
+      if (!mounted) return;
+      ref.read(appShellTabIndexProvider.notifier).state = kEditorTabIndex;
+      // Auto Merge is opened as a pushed route. Dismiss it so the selected
+      // Editor tab underneath becomes visible after loading the project.
+      Navigator.of(context).pop();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content:
+                Text('Could not open the merged audio in the editor: $error')),
+      );
+    }
   }
 }
 

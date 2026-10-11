@@ -33,6 +33,7 @@ dependencies:
 
   # Open exported files/folders in the OS
   url_launcher: ^6.3.0
+  ffmpeg_kit_flutter_new_audio: 2.5.7
 
 dev_dependencies:
   flutter_test:

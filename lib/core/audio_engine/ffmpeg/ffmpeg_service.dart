@@ -1,7 +1,13 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:path/path.dart' as p;
+import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/ffprobe_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/return_code.dart';
+import 'package:resona/core/audio_engine/ffmpeg/audio_filter_math.dart';
+import 'package:resona/core/audio_engine/ffmpeg/encode_options.dart';
 import 'package:resona/features/auto_merge/domain/auto_merge_models.dart';
+import 'package:resona/models/audio_project.dart';
 
 // ---------------------------------------------------------------------------
 // Result type
@@ -36,8 +42,8 @@ class FfmpegResult {
 /// Every public method is safe against "FFmpeg not installed" — they return
 /// [FfmpegResult.failure] immediately rather than throwing.
 ///
-/// Commands are built as `List<String>` argument arrays and executed via
-/// [Process.run] so shell injection is impossible.
+/// Commands are built as `List<String>` argument arrays. Android runs them
+/// through bundled FFmpegKit; desktop runs the system FFmpeg executable.
 class FfmpegService {
   // -------------------------------------------------------------------------
   // Discovery
@@ -50,6 +56,7 @@ class FfmpegService {
   ///
   /// Returns `null` if not found.
   static Future<String?> findFfmpeg() async {
+    if (Platform.isAndroid) return 'bundled-ffmpeg';
     const candidates = ['ffmpeg', 'ffmpeg.exe'];
     for (final name in candidates) {
       try {
@@ -66,17 +73,29 @@ class FfmpegService {
   /// Returns `true` if an FFmpeg binary is reachable.
   static Future<bool> isAvailable() async => (await findFfmpeg()) != null;
 
+  /// Runs an FFmpeg command using the platform's configured engine.
+  Future<FfmpegResult> runCommand({
+    required List<String> arguments,
+    required String outputPath,
+  }) async {
+    final executable = await _ffmpeg();
+    if (executable == null) return FfmpegResult.failure(_notFound);
+    return _run(executable, arguments, outputPath);
+  }
+
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
 
-  static const _notFound =
-      'FFmpeg not found. Please install FFmpeg and ensure it is on your PATH.';
+  static String get _notFound => Platform.isAndroid
+      ? 'Audio processing is unavailable on this device.'
+      : 'FFmpeg not found. Please install FFmpeg and ensure it is on your PATH.';
 
   static Future<String?> _ffmpeg() => findFfmpeg();
 
   /// Finds ffprobe; falls back to the same location as ffmpeg.
   static Future<String?> _ffprobe() async {
+    if (Platform.isAndroid) return 'bundled-ffprobe';
     const candidates = ['ffprobe', 'ffprobe.exe'];
     for (final name in candidates) {
       try {
@@ -94,14 +113,32 @@ class FfmpegService {
   Future<FfmpegResult> _run(
       String executable, List<String> args, String outputPath) async {
     try {
+      if (Platform.isAndroid) {
+        final session = await FFmpegKit.executeWithArguments(args);
+        final code = await session.getReturnCode();
+        final isSafDestination = outputPath.startsWith('content://') ||
+            outputPath.startsWith('saf:');
+        if (ReturnCode.isSuccess(code) &&
+            (isSafDestination || await File(outputPath).exists())) {
+          return FfmpegResult.success(outputPath);
+        }
+        final details = (await session.getOutput())?.trim();
+        return FfmpegResult.failure(
+          details == null || details.isEmpty
+              ? 'Audio processing failed.'
+              : details,
+        );
+      }
+
       final result = await Process.run(executable, args,
           stdoutEncoding: utf8, stderrEncoding: utf8);
       if (result.exitCode == 0 && await File(outputPath).exists()) {
         return FfmpegResult.success(outputPath);
       }
       final stderr = (result.stderr as String).trim();
-      return FfmpegResult.failure(
-          stderr.isNotEmpty ? stderr : 'FFmpeg exited with code ${result.exitCode}');
+      return FfmpegResult.failure(stderr.isNotEmpty
+          ? stderr
+          : 'FFmpeg exited with code ${result.exitCode}');
     } catch (e) {
       return FfmpegResult.failure('Process error: $e');
     }
@@ -132,7 +169,7 @@ class FfmpegService {
     required Duration endTime,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
     final duration = endTime - startTime;
     if (duration <= Duration.zero) {
@@ -141,10 +178,14 @@ class FfmpegService {
 
     final args = [
       '-y',
-      '-ss', _ts(startTime),
-      '-i', inputPath,
-      '-t', _ts(duration),
-      '-c', 'copy',
+      '-ss',
+      _ts(startTime),
+      '-i',
+      inputPath,
+      '-t',
+      _ts(duration),
+      '-c',
+      'copy',
       outputPath,
     ];
 
@@ -161,22 +202,30 @@ class FfmpegService {
     required String outputPath,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
-    if (inputPaths.isEmpty) return const FfmpegResult.failure('No input files given.');
+    if (exe == null) return FfmpegResult.failure(_notFound);
+    if (inputPaths.isEmpty) {
+      return const FfmpegResult.failure('No input files given.');
+    }
 
     // Write a temporary concat list file.
-    final listFile = File(p.join(
-        p.dirname(outputPath), '_resona_concat_${DateTime.now().millisecondsSinceEpoch}.txt'));
+    final listFile = File(p.join(p.dirname(outputPath),
+        '_resona_concat_${DateTime.now().millisecondsSinceEpoch}.txt'));
     try {
-      final lines = inputPaths.map((fp) => "file '${fp.replaceAll("'", "'\\''")}'").join('\n');
+      final lines = inputPaths
+          .map((fp) => "file '${fp.replaceAll("'", "'\\''")}'")
+          .join('\n');
       await listFile.writeAsString(lines);
 
       final args = [
         '-y',
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', listFile.path,
-        '-c', 'copy',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        listFile.path,
+        '-c',
+        'copy',
         outputPath,
       ];
 
@@ -198,7 +247,7 @@ class FfmpegService {
     Duration? totalDuration,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
     // Build the `afade` filter chain.
     final filters = <String>[];
@@ -223,8 +272,10 @@ class FfmpegService {
 
     final args = [
       '-y',
-      '-i', inputPath,
-      '-af', filterStr,
+      '-i',
+      inputPath,
+      '-af',
+      filterStr,
       outputPath,
     ];
 
@@ -251,10 +302,11 @@ class FfmpegService {
     Duration crossfadeDuration = const Duration(seconds: 1),
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
     if (clips.isEmpty) return const FfmpegResult.failure('No clips provided.');
 
-    // Single clip — just cut + fade, no complex filter needed.
+    // Single clip — trim and fade in one encode pass. Stream-copying a cut
+    // into a WAV-named temporary file would leave the container inconsistent.
     if (clips.length == 1) {
       final clip = clips.first;
       final path = clip['path'] as String;
@@ -262,30 +314,41 @@ class FfmpegService {
       final end = clip['endTime'] as Duration? ?? Duration.zero;
       final fi = clip['fadeIn'] as Duration? ?? Duration.zero;
       final fo = clip['fadeOut'] as Duration? ?? Duration.zero;
+      final clipDuration = end - start;
+      if (clipDuration <= Duration.zero) {
+        return const FfmpegResult.failure('End time must be after start time.');
+      }
 
-      // Cut first.
-      final tmp = p.join(p.dirname(outputPath),
-          '_resona_tmp_${DateTime.now().millisecondsSinceEpoch}.wav');
-      final cutResult = end > Duration.zero
-          ? await cutAudio(
-              inputPath: path,
-              outputPath: tmp,
-              startTime: start,
-              endTime: end,
-            )
-          : FfmpegResult.success(path);
+      final filters = <String>[];
+      if (fi > Duration.zero) {
+        filters.add('afade=t=in:st=0:d=${fi.inMilliseconds / 1000.0}');
+      }
+      if (fo > Duration.zero) {
+        final fadeStart = (clipDuration - fo).inMilliseconds / 1000.0;
+        filters
+            .add('afade=t=out:st=$fadeStart:d=${fo.inMilliseconds / 1000.0}');
+      }
 
-      if (!cutResult.success) return cutResult;
-
-      final fadeResult = await applyFade(
-        inputPath: cutResult.outputPath!,
-        outputPath: outputPath,
-        fadeIn: fi,
-        fadeOut: fo,
-      );
-
-      if (tmp != path && await File(tmp).exists()) await File(tmp).delete();
-      return fadeResult;
+      final args = <String>[
+        '-y',
+        '-ss',
+        _ts(start),
+        '-t',
+        _ts(clipDuration),
+        '-i',
+        path,
+        if (filters.isNotEmpty) ...['-af', filters.join(',')],
+        '-ar',
+        '44100',
+        '-ac',
+        '2',
+        '-codec:a',
+        'libmp3lame',
+        '-b:a',
+        '192k',
+        outputPath,
+      ];
+      return _run(exe, args, outputPath);
     }
 
     // -----------------------------------------------------------------------
@@ -293,8 +356,8 @@ class FfmpegService {
     // -----------------------------------------------------------------------
     //
     // Strategy:
-    //   1. For each clip, emit one `-ss`/`-t` trimmed input.
-    //   2. Apply per-clip afade filters.
+    //   1. Declare source inputs.
+    //   2. Trim, normalize, and apply fades to each clip in the filter graph.
     //   3. Join with the requested transition type.
     // -----------------------------------------------------------------------
 
@@ -302,18 +365,24 @@ class FfmpegService {
     final filterParts = <String>[];
     final n = clips.length;
 
-    // Step 1 — declare inputs with seek + duration trimming.
+    // Step 1 — seek and limit each input before adding it to the graph. Doing
+    // the trim at the input boundary keeps the selected source range explicit
+    // and avoids relying on atrim timestamp parsing in FFmpegKit.
     for (var i = 0; i < n; i++) {
       final clip = clips[i];
       final path = clip['path'] as String;
       final start = clip['startTime'] as Duration? ?? Duration.zero;
       final end = clip['endTime'] as Duration? ?? Duration.zero;
-
-      inputArgs.addAll(['-ss', _ts(start)]);
-      if (end > Duration.zero) {
-        inputArgs.addAll(['-t', _ts(end - start)]);
+      if (end > Duration.zero && end <= start) {
+        return FfmpegResult.failure(
+            'Clip ${i + 1}: end time must be after start time.');
       }
-      inputArgs.addAll(['-i', path]);
+      inputArgs.addAll([
+        if (start > Duration.zero) ...['-ss', _ts(start)],
+        if (end > Duration.zero) ...['-t', _ts(end - start)],
+        '-i',
+        path,
+      ]);
     }
 
     // Step 2 — per-clip fade filters; output labelled [f0], [f1], …
@@ -327,7 +396,13 @@ class FfmpegService {
       final end = clip['endTime'] as Duration? ?? Duration.zero;
       final clipLen = end > Duration.zero ? end - start : null;
 
-      final subFilters = <String>[];
+      // Normalize each source before concat/crossfade. Phone recordings and
+      // imported music commonly use different sample rates and channel layouts.
+      final subFilters = <String>[
+        'asetpts=PTS-STARTPTS',
+        'aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo',
+        'aresample=44100',
+      ];
 
       if (fi > Duration.zero) {
         final d = fi.inMilliseconds / 1000.0;
@@ -340,7 +415,7 @@ class FfmpegService {
         if (st >= 0) subFilters.add('afade=t=out:st=$st:d=$d');
       }
 
-      final filterExpr = subFilters.isEmpty ? 'anull' : subFilters.join(',');
+      final filterExpr = subFilters.join(',');
       filterParts.add('[$i:a]$filterExpr[f$i]');
     }
 
@@ -381,8 +456,7 @@ class FfmpegService {
           }
         }
         final total = n + (n - 1); // clips + silence segments
-        filterParts
-            .add('${concatInputs.join('')}concat=n=$total:v=0:a=1[out]');
+        filterParts.add('${concatInputs.join('')}concat=n=$total:v=0:a=1[out]');
         finalLabel = '[out]';
     }
 
@@ -391,8 +465,18 @@ class FfmpegService {
     final args = [
       '-y',
       ...inputArgs,
-      '-filter_complex', filterComplex,
-      '-map', finalLabel,
+      '-filter_complex',
+      filterComplex,
+      '-map',
+      finalLabel,
+      '-ar',
+      '44100',
+      '-ac',
+      '2',
+      '-codec:a',
+      'libmp3lame',
+      '-b:a',
+      '192k',
       outputPath,
     ];
 
@@ -409,11 +493,12 @@ class FfmpegService {
     int? channels,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
     final args = <String>[
       '-y',
-      '-i', inputPath,
+      '-i',
+      inputPath,
     ];
 
     if (bitrate != null) args.addAll(['-b:a', '${bitrate}k']);
@@ -431,16 +516,18 @@ class FfmpegService {
     required String outputPath,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
+    final ext = p.extension(outputPath).replaceFirst('.', '');
+    final encode = AudioEncodeOptions(format: ext.isEmpty ? 'mp3' : ext);
     final args = [
       '-y',
-      '-i', inputPath,
-      '-vn',        // no video
-      '-acodec', 'copy',
+      '-i',
+      inputPath,
+      '-vn',
+      ...encode.toArguments(),
       outputPath,
     ];
-
     return _run(exe, args, outputPath);
   }
 
@@ -448,16 +535,36 @@ class FfmpegService {
   ///
   /// Returns `null` if the file cannot be probed or FFprobe is unavailable.
   Future<Duration?> probeDuration(String path) async {
+    if (Platform.isAndroid) {
+      try {
+        final session = await FFprobeKit.getMediaInformation(path);
+        final code = await session.getReturnCode();
+        if (!ReturnCode.isSuccess(code)) return null;
+        final duration = session.getMediaInformation();
+        final seconds = double.tryParse(duration?.getDuration() ?? '');
+        if (seconds == null || !seconds.isFinite || seconds <= 0) return null;
+        return Duration(microseconds: (seconds * 1e6).round());
+      } catch (_) {
+        return null;
+      }
+    }
+
     final probe = await _ffprobe();
     if (probe == null) return null;
 
     try {
-      final result = await Process.run(probe, [
-        '-v', 'quiet',
-        '-print_format', 'json',
-        '-show_format',
-        path,
-      ], stdoutEncoding: utf8, stderrEncoding: utf8);
+      final result = await Process.run(
+          probe,
+          [
+            '-v',
+            'quiet',
+            '-print_format',
+            'json',
+            '-show_format',
+            path,
+          ],
+          stdoutEncoding: utf8,
+          stderrEncoding: utf8);
 
       if (result.exitCode != 0) return null;
 
@@ -488,7 +595,7 @@ class FfmpegService {
     double treble = 0,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
     // Build an `equalizer` filter chain for each non-zero band.
     final filters = <String>[];
@@ -507,8 +614,10 @@ class FfmpegService {
 
     final args = [
       '-y',
-      '-i', inputPath,
-      '-af', filterStr,
+      '-i',
+      inputPath,
+      '-af',
+      filterStr,
       outputPath,
     ];
 
@@ -522,13 +631,15 @@ class FfmpegService {
     required String outputPath,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
     const filter = 'loudnorm=I=-23:TP=-2:LRA=7';
     final args = [
       '-y',
-      '-i', inputPath,
-      '-af', filter,
+      '-i',
+      inputPath,
+      '-af',
+      filter,
       outputPath,
     ];
 
@@ -550,7 +661,7 @@ class FfmpegService {
     bool preservePitch = true,
   }) async {
     final exe = await _ffmpeg();
-    if (exe == null) return const FfmpegResult.failure(_notFound);
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
     if (speed <= 0) {
       return const FfmpegResult.failure('Speed must be a positive number.');
@@ -560,7 +671,7 @@ class FfmpegService {
 
     if (preservePitch) {
       // Chain `atempo` filters to stay within [0.5, 2.0] per filter.
-      final filters = _buildAtempoChain(speed);
+      final filters = AudioFilterMath.atempoChain(speed);
       filterStr = filters.join(',');
     } else {
       // Alter sample rate then resample — pitch shifts with speed.
@@ -570,35 +681,84 @@ class FfmpegService {
 
     final args = [
       '-y',
-      '-i', inputPath,
-      '-af', filterStr,
+      '-i',
+      inputPath,
+      '-af',
+      filterStr,
       outputPath,
     ];
 
     return _run(exe, args, outputPath);
   }
 
-  /// Decomposes [speed] into a chain of `atempo` values, each in [0.5, 2.0].
-  static List<String> _buildAtempoChain(double speed) {
-    final filters = <String>[];
-    var remaining = speed;
+  /// Shifts pitch by [semitones] while keeping duration approximately the same.
+  Future<FfmpegResult> changePitch({
+    required String inputPath,
+    required String outputPath,
+    required double semitones,
+  }) async {
+    final exe = await _ffmpeg();
+    if (exe == null) return FfmpegResult.failure(_notFound);
 
-    if (remaining < 0.5) {
-      // Slow down: repeatedly halve until within range.
-      while (remaining < 0.5) {
-        filters.add('atempo=0.5');
-        remaining /= 0.5;
-      }
-    } else if (remaining > 2.0) {
-      // Speed up: repeatedly double until within range.
-      while (remaining > 2.0) {
-        filters.add('atempo=2.0');
-        remaining /= 2.0;
-      }
+    final filters = AudioFilterMath.pitchFilters(semitones);
+    final args = [
+      '-y',
+      '-i',
+      inputPath,
+      '-af',
+      filters.isEmpty ? 'anull' : filters.join(','),
+      outputPath,
+    ];
+    return _run(exe, args, outputPath);
+  }
+
+  /// Applies enabled [effects] to a single file.
+  Future<FfmpegResult> applyEffects({
+    required String inputPath,
+    required String outputPath,
+    required List<Effect> effects,
+  }) async {
+    final exe = await _ffmpeg();
+    if (exe == null) return FfmpegResult.failure(_notFound);
+    final filters = AudioFilterMath.effectFilters(effects);
+    final args = [
+      '-y',
+      '-i',
+      inputPath,
+      '-af',
+      filters.isEmpty ? 'anull' : filters.join(','),
+      outputPath,
+    ];
+    return _run(exe, args, outputPath);
+  }
+
+  /// Mixes every audible clip in [project] onto one timeline and encodes it.
+  Future<FfmpegResult> mixProject({
+    required AudioProject project,
+    required String outputPath,
+    AudioEncodeOptions encode = const AudioEncodeOptions(format: 'mp3'),
+  }) async {
+    final exe = await _ffmpeg();
+    if (exe == null) return FfmpegResult.failure(_notFound);
+
+    final clips = TimelineMixBuilder.clipsFromProject(project);
+    if (clips.isEmpty) {
+      return const FfmpegResult.failure(
+          'This project has no audible clips to export.');
     }
 
-    // Remainder pass — format to 6 decimal places to avoid float noise.
-    filters.add('atempo=${remaining.toStringAsFixed(6)}');
-    return filters;
+    final graph =
+        TimelineMixBuilder.build(clips, sampleRate: encode.sampleRate);
+    final args = [
+      '-y',
+      ...graph.inputArgs,
+      '-filter_complex',
+      graph.filterComplex,
+      '-map',
+      graph.mapLabel,
+      ...encode.toArguments(),
+      outputPath,
+    ];
+    return _run(exe, args, outputPath);
   }
 }

@@ -1,14 +1,15 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/return_code.dart';
 import '../../errors/app_exception.dart';
 import 'ffmpeg_availability.dart';
 
-/// Decodes an audio file to raw mono 16-bit PCM via a system `ffmpeg`
-/// process. This is intentionally narrow — just enough to feed the waveform
-/// engine real sample data (spec section 18/48: waveform generation must be
-/// "based on actual audio data", never a static placeholder). The full
-/// cut/merge/fade FFmpegService (spec section 47) arrives in a later phase
-/// and will reuse this same process-invocation approach.
+/// Decodes an audio file to raw mono 16-bit PCM via FFmpeg. Android uses the
+/// bundled FFmpegKit library; desktop uses the system executable. This is
+/// intentionally narrow — just enough to feed the waveform engine real
+/// sample data (spec section 18/48: waveform generation must be based on actual
+/// audio data, never a static placeholder).
 class FfmpegPcmDecoder {
   /// Sample rate used purely for waveform decoding — deliberately low.
   /// Peaks don't need full fidelity, and a low rate keeps decoding fast even
@@ -31,6 +32,9 @@ class FfmpegPcmDecoder {
       );
     }
 
+    final tempPath = Platform.isAndroid
+        ? '${Directory.systemTemp.path}${Platform.pathSeparator}resona_${DateTime.now().microsecondsSinceEpoch}.pcm'
+        : null;
     final args = <String>[
       '-y',
       '-v', 'error',
@@ -38,32 +42,48 @@ class FfmpegPcmDecoder {
       '-ac', '1',
       '-ar', '$waveformSampleRate',
       '-f', 's16le',
-      '-',
+      tempPath ?? '-',
     ];
 
-    ProcessResult result;
+    Uint8List bytes;
     try {
-      result = await Process.run(
-        'ffmpeg',
-        args,
-        stdoutEncoding: null,
-        stderrEncoding: null,
-      );
+      if (Platform.isAndroid) {
+        try {
+          final session = await FFmpegKit.executeWithArguments(args);
+          if (!ReturnCode.isSuccess(await session.getReturnCode())) {
+            throw const AppException(
+              "RESONA couldn't process this audio file.",
+              technicalDetails: 'bundled FFmpeg could not decode the source',
+            );
+          }
+          bytes = await File(tempPath!).readAsBytes();
+        } finally {
+          final temp = File(tempPath!);
+          if (await temp.exists()) await temp.delete();
+        }
+      } else {
+        final result = await Process.run(
+          'ffmpeg',
+          args,
+          stdoutEncoding: null,
+          stderrEncoding: null,
+        );
+        if (result.exitCode != 0) {
+          throw AppException(
+            "RESONA couldn't process this audio file.",
+            technicalDetails: 'ffmpeg exited ${result.exitCode}',
+          );
+        }
+        bytes = result.stdout as Uint8List;
+      }
     } catch (e) {
+      if (e is AppException) rethrow;
       throw AppException(
         "RESONA couldn't process this audio file.",
-        technicalDetails: 'ffmpeg process failed to start: $e',
+        technicalDetails: 'ffmpeg decoding failed: $e',
       );
     }
 
-    if (result.exitCode != 0) {
-      throw AppException(
-        "RESONA couldn't process this audio file.",
-        technicalDetails: 'ffmpeg exited ${result.exitCode}',
-      );
-    }
-
-    final bytes = result.stdout as Uint8List;
     if (bytes.isEmpty) {
       throw const AppException(
         "RESONA couldn't process this audio file.",

@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:just_audio/just_audio.dart';
+import '../../../core/audio_engine/duration_probe.dart';
+import '../../../core/audio_engine/media_store.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../core/utils/id_generator.dart';
 import '../../../models/audio_project.dart';
@@ -73,8 +76,7 @@ class EditorState {
       isDirty: isDirty ?? this.isDirty,
       isSaving: isSaving ?? this.isSaving,
       tool: tool ?? this.tool,
-      importError:
-          clearImportError ? null : (importError ?? this.importError),
+      importError: clearImportError ? null : (importError ?? this.importError),
       canUndo: canUndo ?? this.canUndo,
       canRedo: canRedo ?? this.canRedo,
     );
@@ -107,30 +109,32 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
       tracks: [AudioTrack(id: IdGenerator.next(), name: 'Track 1')],
     );
     _history = UndoHistory(current: project);
-    state = EditorState(project: project, isDirty: true, canUndo: false, canRedo: false);
+    state = EditorState(
+        project: project, isDirty: true, canUndo: false, canRedo: false);
   }
 
   /// Opens a newly merged audio file in the timeline editor for further editing.
   /// Automatically creates an [AudioProject] containing the merged audio clip,
   /// loads it into the timeline, and flags the project for editing.
-  Future<void> openMergedFile(String filePath, {String projectName = 'Auto Merge Project'}) async {
-    Duration? duration;
-    final probe = AudioPlayer();
-    try {
-      duration = await probe.setFilePath(filePath);
-    } catch (_) {
-      duration = null;
-    } finally {
-      await probe.dispose();
+  Future<void> openMergedFile(String filePath,
+      {String projectName = 'Auto Merge Project'}) async {
+    if (!await File(filePath).exists()) {
+      throw const AppException('The merged audio file could not be found.');
+    }
+    final stored = await MediaStore.persistCopy(filePath);
+    final duration = await DurationProbe.probe(stored);
+    if (duration == null || duration <= Duration.zero) {
+      throw const AppException(
+          'The merged audio could not be opened for editing.');
     }
 
     final now = DateTime.now();
-    final clipDuration = duration ?? const Duration(seconds: 30);
+    final clipDuration = duration;
     final clipName = filePath.split(RegExp(r'[\\/]')).last;
 
     final clip = AudioClip(
       id: IdGenerator.next(),
-      sourcePath: filePath,
+      sourcePath: stored,
       name: clipName,
       startTime: Duration.zero,
       endTime: clipDuration,
@@ -209,15 +213,8 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     var current = state!;
 
     for (final path in paths) {
-      Duration? duration;
-      final probe = AudioPlayer();
-      try {
-        duration = await probe.setFilePath(path);
-      } catch (_) {
-        duration = null;
-      } finally {
-        await probe.dispose();
-      }
+      final stored = await MediaStore.persistCopy(path);
+      final duration = await DurationProbe.probe(stored);
 
       if (duration == null || duration == Duration.zero) {
         current = current.copyWith(
@@ -238,8 +235,8 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
 
       final clip = AudioClip(
         id: IdGenerator.next(),
-        sourcePath: path,
-        name: path.split(RegExp(r'[\\/]')).last,
+        sourcePath: stored,
+        name: stored.split(RegExp(r'[\\/]')).last,
         startTime: Duration.zero,
         endTime: duration,
         timelinePosition: lastEnd,
@@ -252,8 +249,8 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
       final newProject =
           current.project.copyWith(tracks: tracks, modifiedAt: DateTime.now());
       // Push imported state into history so it can be undone.
-      _history = (_history ?? UndoHistory(current: current.project))
-          .push(newProject);
+      _history =
+          (_history ?? UndoHistory(current: current.project)).push(newProject);
 
       current = current.copyWith(
         project: newProject,
@@ -307,8 +304,8 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
             snapPoints.add(c.timelinePosition + c.sourceDuration);
           }
         }
-        position =
-            snapDuration(position, snapPoints, const Duration(milliseconds: 150));
+        position = snapDuration(
+            position, snapPoints, const Duration(milliseconds: 150));
       }
       return [
         for (final t in tracks)
@@ -394,14 +391,14 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     }
   }
 
-  void updateClipProperties(String trackId, String clipId, AudioClip updatedClip) {
+  void updateClipProperties(
+      String trackId, String clipId, AudioClip updatedClip) {
     _mutateTracks((tracks) => [
           for (final t in tracks)
             t.id == trackId
                 ? t.copyWith(
                     clips: [
-                      for (final c in t.clips)
-                        c.id == clipId ? updatedClip : c
+                      for (final c in t.clips) c.id == clipId ? updatedClip : c
                     ],
                   )
                 : t,
@@ -422,7 +419,9 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
                 name: '${copy.name} copy',
                 startTime: copy.startTime,
                 endTime: copy.endTime,
-                timelinePosition: copy.timelinePosition + copy.sourceDuration + const Duration(milliseconds: 500),
+                timelinePosition: copy.timelinePosition +
+                    copy.sourceDuration +
+                    const Duration(milliseconds: 500),
                 volume: copy.volume,
                 pan: copy.pan,
                 fadeIn: copy.fadeIn,
@@ -461,8 +460,7 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
   }
 
   void deleteTrack(String trackId) {
-    _mutateTracks(
-        (tracks) => tracks.where((t) => t.id != trackId).toList());
+    _mutateTracks((tracks) => tracks.where((t) => t.id != trackId).toList());
   }
 
   void renameTrack(String trackId, String name) {
@@ -527,7 +525,8 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     final s = state;
     if (s == null || name.trim().isEmpty) return;
     state = s.copyWith(
-      project: s.project.copyWith(name: name.trim(), modifiedAt: DateTime.now()),
+      project:
+          s.project.copyWith(name: name.trim(), modifiedAt: DateTime.now()),
       isDirty: true,
     );
   }
@@ -542,12 +541,46 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
       final repo = _ref.read(projectRepositoryProvider);
       final saved = s.project.copyWith(modifiedAt: DateTime.now());
       await repo.save(saved);
+      await repo.clearRecovery();
       _ref.invalidate(recentProjectsProvider);
       state = s.copyWith(project: saved, isDirty: false, isSaving: false);
     } catch (e) {
       state = s.copyWith(isSaving: false);
       throw const AppException("RESONA couldn't save this project.");
     }
+  }
+
+  List<String> missingSourcePaths() {
+    final s = state;
+    if (s == null) return const [];
+    final missing = <String>{};
+    for (final track in s.project.tracks) {
+      for (final clip in track.clips) {
+        if (!File(clip.sourcePath).existsSync()) {
+          missing.add(clip.sourcePath);
+        }
+      }
+    }
+    return missing.toList();
+  }
+
+  Future<void> relocateSource(String oldPath, String newPath) async {
+    final stored = await MediaStore.persistCopy(newPath);
+    _mutateTracks((tracks) => [
+          for (final t in tracks)
+            t.copyWith(
+              clips: [
+                for (final c in t.clips)
+                  c.sourcePath == oldPath ? c.copyWith(sourcePath: stored) : c,
+              ],
+            ),
+        ]);
+  }
+
+  Future<void> writeRecoverySnapshot() async {
+    final s = state;
+    if (s == null || !s.isDirty) return;
+    await _ref.read(projectRepositoryProvider).saveRecovery(s.project);
   }
 }
 

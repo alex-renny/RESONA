@@ -7,12 +7,16 @@ import 'package:just_audio/just_audio.dart';
 /// "import and preview a file" loop today.
 class AudioPlayerService {
   final AudioPlayer _player = AudioPlayer();
+  String? _currentSourcePath;
+
+  String? get currentSourcePath => _currentSourcePath;
 
   Stream<Duration> get positionStream => _player.positionStream;
   Stream<PlayerState> get playerStateStream => _player.playerStateStream;
   Duration? get duration => _player.duration;
 
   Future<Duration?> loadFile(String path) async {
+    _currentSourcePath = path;
     return _player.setFilePath(path);
   }
 
@@ -20,7 +24,8 @@ class AudioPlayerService {
   Future<void> pause() => _player.pause();
   Future<void> stop() => _player.stop();
   Future<void> seek(Duration position) => _player.seek(position);
-  Future<void> setVolume(double volume) => _player.setVolume(volume.clamp(0.0, 1.0));
+  Future<void> setVolume(double volume) =>
+      _player.setVolume(volume.clamp(0.0, 1.0));
   Future<void> setSpeed(double speed) => _player.setSpeed(speed);
 
   void dispose() => _player.dispose();

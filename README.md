@@ -1,6 +1,16 @@
 # RESONA — Shape Your Sound.
 
-**Phase 2** of the RESONA build is on top of Phase 1. This delivery adds:
+**Phase 3** builds on the RESONA foundation with an Android audio engine:
+
+- Android packages include the FFmpeg audio libraries, so audio processing
+  does not depend on a system executable or a computer-side installation.
+- Android 7.0 (API 24) or later is required by the bundled audio engine.
+- Auto Merge performs real trimming, fades, transitions and encoding on the
+  device. Unsupported or unreadable files report an error rather than a fake
+  success.
+- Waveform decoding uses bundled FFmpeg on Android and system FFmpeg on desktop.
+
+The preceding editor foundation includes:
 
 - A **real waveform engine** — decodes actual audio via a system `ffmpeg`
   process (not a placeholder/fake waveform), computes min/max peaks off the

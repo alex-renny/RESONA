@@ -2,7 +2,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit_config.dart';
+import '../../../../core/audio_engine/ffmpeg/encode_options.dart';
 import '../../../../core/audio_engine/ffmpeg/ffmpeg_availability.dart';
+import '../../../../core/audio_engine/ffmpeg/ffmpeg_service.dart';
+import '../../../../core/audio_engine/media_store.dart';
 import '../../../../models/audio_project.dart';
 
 // ─── Export configuration types ──────────────────────────────────────────────
@@ -127,9 +131,8 @@ extension _ExportPhaseExt on _ExportPhase {
 
 /// Professional export dialog driven by FFmpegService.
 ///
-/// Called from [EditorToolbar]'s Export button. For now it exports the first
-/// clip of the first track; full multi-track mixing arrives with the render
-/// engine.
+/// Mixes every audible clip across tracks, honoring mute/solo, volume, pan,
+/// fades, speed, pitch, and clip effects.
 class ExportDialog extends ConsumerStatefulWidget {
   final AudioProject project;
 
@@ -155,6 +158,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   _Channels _channels = _Channels.stereo;
   late final TextEditingController _filenameCtrl;
   String _outputFolder = '';
+  String? _androidSafOutput;
 
   // ── Export state ────────────────────────────────────────────────────────────
   _ExportPhase _phase = _ExportPhase.idle;
@@ -180,6 +184,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
       name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
 
   String _defaultFolder() {
+    if (Platform.isAndroid) return '';
     if (Platform.isWindows) {
       final userProfile = Platform.environment['USERPROFILE'] ?? '';
       return '$userProfile\\Music';
@@ -196,6 +201,15 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
       _phase != _ExportPhase.idle &&
       _phase != _ExportPhase.done &&
       _phase != _ExportPhase.error;
+
+  String get _mimeType => switch (_format) {
+        _ExportFormat.mp3 => 'audio/mpeg',
+        _ExportFormat.wav => 'audio/wav',
+        _ExportFormat.flac => 'audio/flac',
+        _ExportFormat.m4a => 'audio/mp4',
+        _ExportFormat.aac => 'audio/aac',
+        _ExportFormat.ogg => 'audio/ogg',
+      };
 
   // ── UI helpers ──────────────────────────────────────────────────────────────
 
@@ -223,6 +237,35 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     }
   }
 
+  Future<void> _chooseAndroidDestination() async {
+    final baseName = _sanitize(_filenameCtrl.text.trim());
+    final filename =
+        '${baseName.isEmpty ? 'export' : baseName}.${_format.extension}';
+    try {
+      final documentUri = await FFmpegKitConfig.selectDocumentForWrite(
+        filename,
+        _mimeType,
+      );
+      if (!mounted || documentUri == null) return;
+      final safOutput =
+          await FFmpegKitConfig.getSafParameterForWrite(documentUri);
+      if (safOutput == null || safOutput.isEmpty) {
+        throw StateError("RESONA couldn't access the selected save location.");
+      }
+      setState(() {
+        _androidSafOutput = safOutput;
+        _errorMessage = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _phase = _ExportPhase.error;
+        _errorMessage =
+            "RESONA couldn't open the save location picker. Please try again.";
+      });
+    }
+  }
+
   void _showFolderInput() {
     final ctrl = TextEditingController(text: _outputFolder);
     showDialog<String>(
@@ -246,118 +289,80 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   }
 
   Future<void> _startExport() async {
-    // ── FFmpeg check ──────────────────────────────────────────────────────────
-    final ffmpegAvailable = await FfmpegAvailability.check();
-    if (!ffmpegAvailable) {
-      setState(() {
-        _phase = _ExportPhase.error;
-        _errorMessage =
-            'FFmpeg is required for export. Please install FFmpeg and restart RESONA.';
-      });
-      return;
-    }
-
-    // ── Resolve source clip ───────────────────────────────────────────────────
-    final firstClip = widget.project.tracks
-        .expand((t) => t.clips)
-        .cast<AudioClip?>()
-        .firstWhere((_) => true, orElse: () => null);
-
-    if (firstClip == null) {
-      setState(() {
-        _phase = _ExportPhase.error;
-        _errorMessage = 'This project has no audio clips to export.';
-      });
-      return;
-    }
-
-    final sep = Platform.isWindows ? '\\' : '/';
-    final filename =
-        '${_sanitize(_filenameCtrl.text.trim()).isEmpty ? 'export' : _sanitize(_filenameCtrl.text.trim())}.${_format.extension}';
-    final outputPath = '$_outputFolder$sep$filename';
-
-    // ── Build FFmpeg args ─────────────────────────────────────────────────────
-    //
-    // We re-encode the source file of the first clip with the user's chosen
-    // settings. Trimming (startTime / endTime) is honoured via -ss / -to.
-    // Multi-track mixing arrives with the render engine — an honest note is
-    // shown in the UI.
-    final args = <String>[
-      '-y', // overwrite
-      '-ss', _durToSeconds(firstClip.startTime),
-      '-to', _durToSeconds(firstClip.endTime),
-      '-i', firstClip.sourcePath,
-      '-ar', _sampleRate.value.toString(),
-      '-ac', _channels.value.toString(),
-    ];
-
-    if (_format.supportsBitrate) {
-      args.addAll(['-b:a', _bitrate.ffmpegValue]);
-    }
-
-    if (_format == _ExportFormat.mp3) {
-      args.addAll(['-codec:a', 'libmp3lame']);
-    } else if (_format == _ExportFormat.flac) {
-      args.addAll(['-codec:a', 'flac']);
-    } else if (_format == _ExportFormat.wav) {
-      args.addAll(['-codec:a', 'pcm_s16le']);
-    } else if (_format == _ExportFormat.m4a) {
-      args.addAll(['-codec:a', 'aac', '-f', 'ipod']);
-    } else if (_format == _ExportFormat.aac) {
-      args.addAll(['-codec:a', 'aac']);
-    } else if (_format == _ExportFormat.ogg) {
-      args.addAll(['-codec:a', 'libvorbis']);
-    }
-
-    args.add(outputPath);
-
-    // ── Run ───────────────────────────────────────────────────────────────────
-    setState(() => _phase = _ExportPhase.preparing);
-    await _delay(400);
-
-    setState(() => _phase = _ExportPhase.processing);
-    await _delay(300);
-
-    setState(() => _phase = _ExportPhase.encoding);
-
-    ProcessResult result;
+    if (_isExporting) return;
     try {
-      result = await Process.run('ffmpeg', args);
-    } catch (e) {
+      final ffmpegAvailable = await FfmpegAvailability.check();
+      if (!ffmpegAvailable) {
+        throw StateError('Audio export is unavailable on this device.');
+      }
+
+      final hasClips = widget.project.tracks.any((t) => t.clips.isNotEmpty);
+      if (!hasClips) throw StateError('This project has no audio clips to export.');
+
+      final baseName = _sanitize(_filenameCtrl.text.trim());
+      final filename = '${baseName.isEmpty ? 'export' : baseName}.${_format.extension}';
+      var outputPath = '$_outputFolder${Platform.isWindows ? '\\' : '/'}$filename';
+      if (!Platform.isAndroid && _outputFolder.isEmpty) {
+        outputPath = await MediaStore.exportPath(filename);
+      }
+
+      if (Platform.isAndroid) {
+        if (_androidSafOutput == null) {
+          await _chooseAndroidDestination();
+          if (!mounted || _androidSafOutput == null) return;
+        }
+        outputPath = _androidSafOutput!;
+      }
+
+      final encode = AudioEncodeOptions(
+        format: _format.extension,
+        bitrateKbps: int.parse(_bitrate.ffmpegValue.replaceAll('k', '')),
+        sampleRate: _sampleRate.value,
+        channels: _channels.value,
+      );
+
+      setState(() {
+        _phase = _ExportPhase.preparing;
+        _errorMessage = null;
+      });
+      await _delay(200);
+      if (!mounted) return;
+      setState(() => _phase = _ExportPhase.processing);
+      await _delay(200);
+      if (!mounted) return;
+      setState(() => _phase = _ExportPhase.encoding);
+
+      final result = await FfmpegService().mixProject(
+        project: widget.project,
+        outputPath: outputPath,
+        encode: encode,
+      );
+      if (!mounted) return;
+
+      if (!result.success) {
+        throw StateError(result.errorMessage ?? "RESONA couldn't export this audio.");
+      }
+
+      setState(() => _phase = _ExportPhase.finalizing);
+      await _delay(300);
+      if (!mounted) return;
+      setState(() {
+        _phase = _ExportPhase.done;
+        _outputPath = Platform.isAndroid ? filename : outputPath;
+      });
+    } catch (error) {
       if (!mounted) return;
       setState(() {
         _phase = _ExportPhase.error;
-        _errorMessage = 'Could not launch FFmpeg: $e';
-      });
-      return;
-    }
-
-    if (!mounted) return;
-
-    setState(() => _phase = _ExportPhase.finalizing);
-    await _delay(300);
-
-    if (!mounted) return;
-
-    if (result.exitCode != 0) {
-      setState(() {
-        _phase = _ExportPhase.error;
-        _errorMessage =
-            'FFmpeg exited with code ${result.exitCode}:\n${result.stderr}';
-      });
-    } else {
-      setState(() {
-        _phase = _ExportPhase.done;
-        _outputPath = outputPath;
+        _errorMessage = error is StateError
+            ? error.message.toString()
+            : "RESONA couldn't save the audio. Choose a destination and filename, then try again.";
       });
     }
   }
 
   Future<void> _delay(int ms) =>
       Future.delayed(Duration(milliseconds: ms));
-
-  String _durToSeconds(Duration d) =>
-      (d.inMilliseconds / 1000.0).toStringAsFixed(3);
 
   Future<void> _openFile(String path) async {
     try {
@@ -460,8 +465,8 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Exports the first available clip. '
-                  'Multi-track mixing arrives with the render engine.',
+                  'Exports a mix of every audible track. Muted tracks are skipped, '
+                  'and Solo limits the mix to soloed tracks.',
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: cs.onSecondaryContainer),
                 ),
@@ -478,7 +483,10 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           value: _format,
           items: _ExportFormat.values,
           labelOf: (f) => f.label,
-          onChanged: (f) => setState(() => _format = f),
+          onChanged: (f) => setState(() {
+            _format = f;
+            _androidSafOutput = null;
+          }),
         ),
         const SizedBox(height: 14),
 
@@ -522,6 +530,9 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
         const SizedBox(height: 6),
         TextField(
           controller: _filenameCtrl,
+          onChanged: Platform.isAndroid
+              ? (_) => setState(() => _androidSafOutput = null)
+              : null,
           decoration: InputDecoration(
             suffixText: '.${_format.extension}',
             border: const OutlineInputBorder(),
@@ -537,9 +548,13 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           children: [
             Expanded(
               child: Text(
-                _outputFolder.isEmpty ? 'No folder selected' : _outputFolder,
+                Platform.isAndroid
+                    ? (_androidSafOutput == null
+                        ? 'Choose where to save the file'
+                        : 'Destination selected for ${_filenameCtrl.text}.${_format.extension}')
+                    : (_outputFolder.isEmpty ? 'No folder selected' : _outputFolder),
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: _outputFolder.isEmpty
+                  color: (!Platform.isAndroid && _outputFolder.isEmpty)
                       ? cs.error
                       : cs.onSurface.withValues(alpha: 0.8),
                 ),
@@ -547,11 +562,19 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
                 maxLines: 1,
               ),
             ),
-            const SizedBox(width: 8),
-            OutlinedButton(
-              onPressed: _chooseFolder,
-              child: const Text('Choose…'),
-            ),
+            if (Platform.isAndroid) ...[
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _isExporting ? null : _chooseAndroidDestination,
+                child: const Text('Choose…'),
+              ),
+            ] else ...[
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _chooseFolder,
+                child: const Text('Choose…'),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 6),
@@ -585,8 +608,10 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
             ),
             const SizedBox(width: 8),
             FilledButton.icon(
-              onPressed:
-                  _outputFolder.isEmpty ? null : _startExport,
+              onPressed: _isExporting ||
+                      (!Platform.isAndroid && _outputFolder.isEmpty)
+                  ? null
+                  : _startExport,
               icon: const Icon(Icons.upload_outlined, size: 18),
               label: Text(
                 _phase == _ExportPhase.error ? 'Retry' : 'Export',
@@ -659,29 +684,36 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           ),
         ],
         const SizedBox(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _outputPath != null
-                    ? () => _openFolder(_outputPath!)
-                    : null,
-                icon: const Icon(Icons.folder_open_outlined, size: 18),
-                label: const Text('Open Folder'),
+        if (!Platform.isAndroid)
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _outputPath != null
+                      ? () => _openFolder(_outputPath!)
+                      : null,
+                  icon: const Icon(Icons.folder_open_outlined, size: 18),
+                  label: const Text('Open Folder'),
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _outputPath != null
-                    ? () => _openFile(_outputPath!)
-                    : null,
-                icon: const Icon(Icons.play_circle_outline, size: 18),
-                label: const Text('Open File'),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _outputPath != null
+                      ? () => _openFile(_outputPath!)
+                      : null,
+                  icon: const Icon(Icons.play_circle_outline, size: 18),
+                  label: const Text('Open File'),
+                ),
               ),
-            ),
-          ],
-        ),
+            ],
+          )
+        else
+          Text(
+            'Saved to your selected location.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium,
+          ),
         const SizedBox(height: 12),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),

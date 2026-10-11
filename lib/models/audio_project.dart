@@ -76,6 +76,7 @@ class AudioClip {
   Duration get sourceDuration => endTime - startTime;
 
   AudioClip copyWith({
+    String? sourcePath,
     String? name,
     Duration? startTime,
     Duration? endTime,
@@ -92,7 +93,7 @@ class AudioClip {
   }) {
     return AudioClip(
       id: id,
-      sourcePath: sourcePath,
+      sourcePath: sourcePath ?? this.sourcePath,
       name: name ?? this.name,
       startTime: startTime ?? this.startTime,
       endTime: endTime ?? this.endTime,
@@ -245,16 +246,18 @@ class AudioProject {
   int get trackCount => tracks.length;
 
   AudioProject copyWith({
+    String? id,
     String? name,
+    DateTime? createdAt,
     DateTime? modifiedAt,
     List<AudioTrack>? tracks,
     int? sampleRate,
     Map<String, dynamic>? projectSettings,
   }) {
     return AudioProject(
-      id: id,
+      id: id ?? this.id,
       name: name ?? this.name,
-      createdAt: createdAt,
+      createdAt: createdAt ?? this.createdAt,
       modifiedAt: modifiedAt ?? DateTime.now(),
       tracks: tracks ?? this.tracks,
       sampleRate: sampleRate ?? this.sampleRate,
