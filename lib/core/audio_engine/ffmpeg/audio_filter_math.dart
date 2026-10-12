@@ -48,12 +48,14 @@ class AudioFilterMath {
     required Duration clipDuration,
   }) {
     final filters = <String>[];
-    if (fadeIn > Duration.zero) {
-      filters.add('afade=t=in:st=0:d=${_sec(fadeIn)}');
+    final safeFadeIn = fadeIn > clipDuration ? clipDuration : fadeIn;
+    final safeFadeOut = fadeOut > clipDuration ? clipDuration : fadeOut;
+    if (safeFadeIn > Duration.zero) {
+      filters.add('afade=t=in:st=0:d=${_sec(safeFadeIn)}');
     }
-    if (fadeOut > Duration.zero && clipDuration > fadeOut) {
-      final start = _sec(clipDuration - fadeOut);
-      filters.add('afade=t=out:st=$start:d=${_sec(fadeOut)}');
+    if (safeFadeOut > Duration.zero) {
+      final start = _sec(clipDuration - safeFadeOut);
+      filters.add('afade=t=out:st=$start:d=${_sec(safeFadeOut)}');
     }
     return filters;
   }
@@ -221,10 +223,15 @@ class TimelineMixBuilder {
       }
       final pan = AudioFilterMath.panFilter(clip.pan);
       if (pan != null) chain.add(pan);
+      final renderedDuration = Duration(
+        microseconds: (clip.clipDuration.inMicroseconds /
+                (clip.speed > 0 ? clip.speed : 1.0))
+            .round(),
+      );
       chain.addAll(AudioFilterMath.fadeFilters(
         fadeIn: clip.fadeIn,
         fadeOut: clip.fadeOut,
-        clipDuration: clip.clipDuration,
+        clipDuration: renderedDuration,
       ));
       chain.addAll(AudioFilterMath.effectFilters(clip.effects));
       final delayMs = clip.timelinePosition.inMilliseconds;

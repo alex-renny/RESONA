@@ -5,8 +5,8 @@ import '../../../../models/audio_project.dart';
 import '../../application/editor_project_provider.dart';
 import 'audio_clip_widget.dart';
 
-/// The horizontal lane for one track's clips. Tapping empty space deselects
-/// the current clip.
+/// The horizontal lane for one track's clips. Tapping its empty space selects
+/// the track as the destination for newly imported audio.
 class TrackLane extends ConsumerWidget {
   final AudioTrack track;
   final double pixelsPerSecond;
@@ -29,7 +29,7 @@ class TrackLane extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final notifier = ref.read(editorProjectProvider.notifier);
     return GestureDetector(
-      onTap: () => notifier.selectClip(null, null),
+      onTap: () => notifier.selectClip(track.id, null),
       child: Container(
         width: width,
         height: height,

@@ -219,7 +219,7 @@ class _ClipInspectorState extends ConsumerState<ClipInspector> {
                 Icon(Icons.tune_rounded, size: 18, color: cs.primary),
                 const SizedBox(width: ResonaSpacing.sm),
                 Text(
-                  'Clip Inspector',
+                  'Edit Clip',
                   style: Theme.of(context)
                       .textTheme
                       .titleMedium
@@ -249,6 +249,16 @@ class _ClipInspectorState extends ConsumerState<ClipInspector> {
       controller: widget.scrollController,
       padding: const EdgeInsets.all(ResonaSpacing.lg),
       children: [
+        Text(
+          'Edits update the playing preview after a brief refresh and are included in export. Save the project to keep them for later.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context)
+                    .colorScheme
+                    .onSurface
+                    .withValues(alpha: 0.72),
+              ),
+        ),
+        const SizedBox(height: ResonaSpacing.md),
         _NameField(
           controller: _nameController,
           onEditingStarted: () => setState(() => _nameEditing = true),
@@ -770,15 +780,112 @@ class _ActionsSection extends ConsumerWidget {
     required this.onResetAll,
   });
 
+  Future<void> _showMoveClipDialog(
+    BuildContext context,
+    List<AudioTrack> tracks,
+    EditorProjectNotifier notifier,
+  ) async {
+    if (tracks.isEmpty) return;
+    var destinationTrackId = trackId;
+    final positionController = TextEditingController(
+      text: (clip.timelinePosition.inMilliseconds / 1000).toStringAsFixed(3),
+    );
+    String? error;
+    final moved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Move clip'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Choose a track and where the clip should start. The position is measured from the start of the whole timeline.'),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: destinationTrackId,
+                decoration: const InputDecoration(labelText: 'Destination track'),
+                items: [
+                  for (final track in tracks)
+                    DropdownMenuItem(value: track.id, child: Text(track.name)),
+                ],
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => destinationTrackId = value);
+                },
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: positionController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'Start position (seconds)',
+                  hintText: '30.000',
+                  errorText: error,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                final seconds = double.tryParse(positionController.text.trim());
+                if (seconds == null || !seconds.isFinite || seconds < 0) {
+                  setDialogState(() => error = 'Enter a time in seconds, such as 30 or 30.500.');
+                  return;
+                }
+                final success = notifier.moveClipToTrack(
+                  trackId,
+                  destinationTrackId,
+                  clip.id,
+                  Duration(microseconds: (seconds * Duration.microsecondsPerSecond).round()),
+                );
+                if (!success) {
+                  setDialogState(() => error = 'This clip or destination track is locked. Unlock it and try again.');
+                  return;
+                }
+                Navigator.pop(dialogContext, true);
+              },
+              icon: const Icon(Icons.drive_file_move_outline),
+              label: const Text('Move clip'),
+            ),
+          ],
+        ),
+      ),
+    );
+    positionController.dispose();
+    if (moved == true && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Clip moved to its new track and timeline position.')),
+      );
+      onClose?.call();
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
     final notifier = ref.read(editorProjectProvider.notifier);
+    final editor = ref.watch(editorProjectProvider);
 
     return _Section(
       title: 'Actions',
       icon: Icons.build_circle_outlined,
       children: [
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.drive_file_move_outline),
+            label: const Text('Move Clip to Track or Time'),
+            onPressed: editor == null
+                ? null
+                : () => _showMoveClipDialog(context, editor.project.tracks, notifier),
+          ),
+        ),
+        const SizedBox(height: ResonaSpacing.sm),
         // Duplicate
         SizedBox(
           width: double.infinity,
@@ -786,7 +893,14 @@ class _ActionsSection extends ConsumerWidget {
             icon: const Icon(Icons.copy_rounded),
             label: const Text('Duplicate Clip'),
             onPressed: () {
-              notifier.duplicateClip(trackId, clip.id);
+              final duplicateId = notifier.duplicateClip(trackId, clip.id);
+              if (duplicateId != null && context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('A copy was added after the original and brought into view.'),
+                  ),
+                );
+              }
               onClose?.call();
             },
           ),
@@ -945,3 +1059,5 @@ class _SmallIconButton extends StatelessWidget {
     );
   }
 }
+
+

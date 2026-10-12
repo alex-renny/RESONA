@@ -43,12 +43,16 @@ class TrackHeader extends ConsumerWidget {
             children: [
               Expanded(
                 child: GestureDetector(
-                  onTap: () => _rename(context, ref),
-                  child: Text(
-                    track.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.labelLarge,
+                  onTap: () => notifier.selectClip(track.id, null),
+                  onDoubleTap: () => _rename(context, ref),
+                  child: Tooltip(
+                    message: 'Select track. Double-tap to rename.',
+                    child: Text(
+                      track.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelLarge,
+                    ),
                   ),
                 ),
               ),

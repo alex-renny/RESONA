@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/color_scheme.dart';
+import '../../../../core/utils/time_format.dart';
 import '../../../../core/utils/waveform_math.dart';
 import '../../../../models/audio_project.dart';
 import '../../application/editor_project_provider.dart';
@@ -9,9 +10,14 @@ import '../../domain/timeline_geometry.dart';
 import '../clip_inspector.dart';
 import 'waveform_painter.dart';
 
+String _formatCutTime(Duration value) {
+  final milliseconds = value.inMilliseconds.remainder(1000);
+  return '${TimeFormat.format(value)}.${milliseconds.toString().padLeft(3, '0')}';
+}
+
 /// A single clip on the timeline. Shows its real, decoded waveform (never a
 /// placeholder — spec section 18), and supports:
-///  - tap to select (or split, when the Split tool is active)
+///  - tap to select or tap the cut point when Split is active
 ///  - double-tap to open the Clip Inspector
 ///  - drag to move along the track, with snapping to other clip edges
 ///  - dragging either edge to trim in/out points
@@ -50,11 +56,26 @@ class AudioClipWidget extends ConsumerWidget {
       width: width,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () {
+        onTapUp: (details) {
           if (editor?.tool == EditorTool.split) {
-            notifier.splitAt(track.id, clip.id, editor!.playhead);
+            final tapOffset = geometry.pixelsToTime(details.localPosition.dx);
+            final cutTime = clip.timelinePosition + tapOffset;
+            final split = notifier.splitAt(track.id, clip.id, cutTime);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(split
+                      ? 'Split at ${_formatCutTime(cutTime)}. Switch to Select to choose and move the two pieces.'
+                      : 'Tap farther inside the clip. Each piece needs to be at least 0.1 seconds long.'),
+                ),
+              );
+            }
           } else {
             notifier.selectClip(track.id, clip.id);
+            var tapOffset = geometry.pixelsToTime(details.localPosition.dx);
+            if (tapOffset.isNegative) tapOffset = Duration.zero;
+            if (tapOffset > clip.sourceDuration) tapOffset = clip.sourceDuration;
+            notifier.seek(clip.timelinePosition + tapOffset);
           }
         },
         onDoubleTap: () {
@@ -163,3 +184,6 @@ class _EdgeHandle extends StatelessWidget {
     );
   }
 }
+
+
+

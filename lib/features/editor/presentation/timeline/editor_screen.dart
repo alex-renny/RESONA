@@ -6,6 +6,7 @@ import '../../../../core/theme/color_scheme.dart';
 import '../../../../core/utils/scroll_sync.dart';
 import '../../../../core/widgets/resona_empty_state.dart';
 import '../../../settings/application/settings_provider.dart';
+import '../../../../models/audio_project.dart';
 import '../../application/editor_project_provider.dart';
 import '../../domain/timeline_geometry.dart';
 import 'editor_toolbar.dart';
@@ -14,11 +15,8 @@ import 'track_header.dart';
 import 'track_lane.dart';
 import 'transport_bar.dart';
 
-/// The full timeline editor (spec sections 17–21): time ruler, playhead,
-/// track headers, waveform-backed clips, zoom, snapping, drag-to-move,
-/// edge-drag-to-trim and a split tool. Basic cut/copy/paste and undo/redo
-/// land in the next phase on top of the mutation methods already exposed by
-/// [EditorProjectNotifier].
+/// The full timeline editor: ruler, playhead, waveform clips, zoom, snapping,
+/// drag-to-move, edge trimming, tap-to-split, duplicate, and undo/redo.
 class EditorScreen extends ConsumerStatefulWidget {
   const EditorScreen({super.key});
 
@@ -29,7 +27,8 @@ class EditorScreen extends ConsumerStatefulWidget {
 class _EditorScreenState extends ConsumerState<EditorScreen> {
   static const double _headerWidth = 180;
   static const double _rulerHeight = 28;
-  static const double _laneHeight = 76;
+  // Leaves room for Material's 48 px slider touch target plus the track title.
+  static const double _laneHeight = 88;
 
   final _rulerH = ScrollController();
   final _bodyH = ScrollController();
@@ -37,6 +36,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   final _bodyV = ScrollController();
   late final ScrollSync _hSync;
   late final ScrollSync _vSync;
+  String? _lastScrolledSelection;
 
   @override
   void initState() {
@@ -99,6 +99,37 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   Widget _buildTimeline(BuildContext context, EditorState editor, ResonaPalette palette) {
     final geometry = TimelineGeometry(editor.pixelsPerSecond);
+    final selectedId = editor.selectedClipId;
+    if (selectedId != null) {
+      AudioClip? selectedClip;
+      String? selectedTrackId;
+      for (final track in editor.project.tracks) {
+        for (final clip in track.clips) {
+          if (clip.id == selectedId) {
+            selectedClip = clip;
+            selectedTrackId = track.id;
+          }
+        }
+      }
+      final targetClip = selectedClip;
+      final scrollKey = targetClip == null
+          ? null
+          : '$selectedTrackId:$selectedId:${targetClip.timelinePosition.inMicroseconds}';
+      if (targetClip != null && scrollKey != _lastScrolledSelection) {
+        _lastScrolledSelection = scrollKey;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !_bodyH.hasClients) return;
+          final target = geometry.timeToPixels(targetClip.timelinePosition)
+              .clamp(0.0, _bodyH.position.maxScrollExtent)
+              .toDouble();
+          _bodyH.animateTo(
+            target,
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOut,
+          );
+        });
+      }
+    }
     // A little trailing runway past the last clip so there's always room to
     // drop new clips or drag existing ones further right.
     final contentDuration = editor.project.duration + const Duration(seconds: 20);
@@ -172,11 +203,53 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                               ],
                             ),
                             Positioned(
-                              left: playheadX - 1,
+                              left: playheadX - 24,
                               top: 0,
                               bottom: 0,
-                              width: 2,
-                              child: IgnorePointer(child: Container(color: accent)),
+                              width: 48,
+                              child: Tooltip(
+                                message: 'Drag to choose where playback starts',
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTapDown: (details) {
+                                    final offset = details.localPosition.dx - 24;
+                                    ref.read(editorProjectProvider.notifier).seek(
+                                          editor.playhead + geometry.deltaPixelsToTime(offset),
+                                        );
+                                  },
+                                  onHorizontalDragUpdate: (details) {
+                                    ref.read(editorProjectProvider.notifier).seek(
+                                          editor.playhead + geometry.deltaPixelsToTime(details.delta.dx),
+                                        );
+                                  },
+                                  child: Stack(
+                                    alignment: Alignment.topCenter,
+                                    children: [
+                                      Align(
+                                        alignment: Alignment.topCenter,
+                                        child: Container(
+                                          width: 40,
+                                          height: 34,
+                                          decoration: BoxDecoration(
+                                            color: accent,
+                                            borderRadius: BorderRadius.circular(18),
+                                          ),
+                                          child: const Icon(
+                                            Icons.drag_indicator,
+                                            color: Colors.white,
+                                            size: 22,
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        top: 32,
+                                        bottom: 0,
+                                        child: Container(width: 2, color: accent),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -192,3 +265,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     );
   }
 }
+
+
+
+

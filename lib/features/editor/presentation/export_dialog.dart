@@ -11,7 +11,7 @@ import '../../../../models/audio_project.dart';
 
 // ─── Export configuration types ──────────────────────────────────────────────
 
-enum _ExportFormat { mp3, wav, flac, m4a, aac, ogg }
+enum _ExportFormat { flac, wav, mp3, m4a, aac, ogg }
 
 extension _ExportFormatExt on _ExportFormat {
   String get label => name.toUpperCase();
@@ -152,7 +152,8 @@ class ExportDialog extends ConsumerStatefulWidget {
 
 class _ExportDialogState extends ConsumerState<ExportDialog> {
   // ── Config ──────────────────────────────────────────────────────────────────
-  _ExportFormat _format = _ExportFormat.mp3;
+  // FLAC keeps the mixed output lossless while keeping files smaller than WAV.
+  _ExportFormat _format = _ExportFormat.flac;
   _ExportBitrate _bitrate = _ExportBitrate.k320;
   _SampleRate _sampleRate = _SampleRate.hz44100;
   _Channels _channels = _Channels.stereo;
@@ -398,12 +399,13 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
 
+    final screenHeight = MediaQuery.sizeOf(context).height;
     return Dialog(
       clipBehavior: Clip.antiAlias,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
+        constraints: BoxConstraints(maxWidth: 480, maxHeight: screenHeight * 0.9),
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -430,7 +432,9 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
 
               if (_phase == _ExportPhase.idle ||
                   _phase == _ExportPhase.error) ...[
-                _buildForm(theme, cs),
+                Flexible(child: SingleChildScrollView(child: _buildForm(theme, cs))),
+                const SizedBox(height: 8),
+                _buildFormActions(),
               ] else if (_phase == _ExportPhase.done) ...[
                 _buildSuccess(theme, cs),
               ] else ...[
@@ -465,8 +469,9 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Exports a mix of every audible track. Muted tracks are skipped, '
-                  'and Solo limits the mix to soloed tracks.',
+                  'FLAC and WAV keep the rendered mix lossless. MP3, AAC and OGG '
+                  'make smaller files with some quality loss. Muted tracks are '
+                  'skipped; Solo limits the mix to soloed tracks.',
                   style: theme.textTheme.bodySmall
                       ?.copyWith(color: cs.onSecondaryContainer),
                 ),
@@ -596,28 +601,26 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           ),
         ],
 
-        const SizedBox(height: 24),
+      ],
+    );
+  }
 
-        // Actions
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: _isExporting ||
-                      (!Platform.isAndroid && _outputFolder.isEmpty)
-                  ? null
-                  : _startExport,
-              icon: const Icon(Icons.upload_outlined, size: 18),
-              label: Text(
-                _phase == _ExportPhase.error ? 'Retry' : 'Export',
-              ),
-            ),
-          ],
+  Widget _buildFormActions() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        const SizedBox(width: 8),
+        FilledButton.icon(
+          onPressed: _isExporting ||
+                  (!Platform.isAndroid && _outputFolder.isEmpty)
+              ? null
+              : _startExport,
+          icon: const Icon(Icons.upload_outlined, size: 18),
+          label: Text(_phase == _ExportPhase.error ? 'Retry' : 'Export'),
         ),
       ],
     );

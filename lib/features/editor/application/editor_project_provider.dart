@@ -24,6 +24,7 @@ class EditorState {
   final String? selectedClipId;
   final double pixelsPerSecond;
   final Duration playhead;
+  final int seekRequestVersion;
   final bool isDirty;
   final bool isSaving;
   final EditorTool tool;
@@ -41,6 +42,7 @@ class EditorState {
     this.selectedClipId,
     this.pixelsPerSecond = 60,
     this.playhead = Duration.zero,
+    this.seekRequestVersion = 0,
     this.isDirty = false,
     this.isSaving = false,
     this.tool = EditorTool.select,
@@ -57,6 +59,7 @@ class EditorState {
     bool clearSelectedClip = false,
     double? pixelsPerSecond,
     Duration? playhead,
+    int? seekRequestVersion,
     bool? isDirty,
     bool? isSaving,
     EditorTool? tool,
@@ -73,6 +76,7 @@ class EditorState {
           clearSelectedClip ? null : (selectedClipId ?? this.selectedClipId),
       pixelsPerSecond: pixelsPerSecond ?? this.pixelsPerSecond,
       playhead: playhead ?? this.playhead,
+      seekRequestVersion: seekRequestVersion ?? this.seekRequestVersion,
       isDirty: isDirty ?? this.isDirty,
       isSaving: isSaving ?? this.isSaving,
       tool: tool ?? this.tool,
@@ -181,8 +185,15 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     final h = _history;
     if (s == null || h == null || !h.canUndo) return;
     _history = h.undo();
+    final clipStillExists = s.selectedClipId == null ||
+        _history!.current.tracks.any((track) =>
+            track.clips.any((clip) => clip.id == s.selectedClipId));
+    final trackStillExists = s.selectedTrackId == null ||
+        _history!.current.tracks.any((track) => track.id == s.selectedTrackId);
     state = s.copyWith(
       project: _history!.current,
+      clearSelectedClip: !clipStillExists,
+      clearSelectedTrack: !trackStillExists,
       isDirty: true,
       canUndo: _history!.canUndo,
       canRedo: _history!.canRedo,
@@ -194,8 +205,15 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     final h = _history;
     if (s == null || h == null || !h.canRedo) return;
     _history = h.redo();
+    final clipStillExists = s.selectedClipId == null ||
+        _history!.current.tracks.any((track) =>
+            track.clips.any((clip) => clip.id == s.selectedClipId));
+    final trackStillExists = s.selectedTrackId == null ||
+        _history!.current.tracks.any((track) => track.id == s.selectedTrackId);
     state = s.copyWith(
       project: _history!.current,
+      clearSelectedClip: !clipStillExists,
+      clearSelectedTrack: !trackStillExists,
       isDirty: true,
       canUndo: _history!.canUndo,
       canRedo: _history!.canRedo,
@@ -204,11 +222,11 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
 
   // ─── Import ─────────────────────────────────────────────────────────────────
 
-  /// Imports one or more files onto the first track, positioned back to
+  /// Imports one or more files onto the selected track, positioned back to
   /// back after whatever's already there (spec section 11: the user
   /// shouldn't have to manually arrange a straightforward import). Creates a
   /// project automatically if none is open yet.
-  Future<void> importFiles(List<String> paths) async {
+  Future<void> importFiles(List<String> paths, {String? targetTrackId}) async {
     if (state == null) newProject();
     var current = state!;
 
@@ -226,7 +244,11 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
       if (tracks.isEmpty) {
         tracks = [AudioTrack(id: IdGenerator.next(), name: 'Track 1')];
       }
-      final targetTrack = tracks.first;
+      var targetIndex = targetTrackId == null
+          ? 0
+          : tracks.indexWhere((track) => track.id == targetTrackId);
+      if (targetIndex < 0) targetIndex = 0;
+      final targetTrack = tracks[targetIndex];
       final lastEnd = targetTrack.clips.isEmpty
           ? Duration.zero
           : targetTrack.clips
@@ -244,7 +266,11 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
 
       final updatedTrack =
           targetTrack.copyWith(clips: [...targetTrack.clips, clip]);
-      tracks = [updatedTrack, ...tracks.skip(1)];
+      tracks = [
+        ...tracks.take(targetIndex),
+        updatedTrack,
+        ...tracks.skip(targetIndex + 1),
+      ];
 
       final newProject =
           current.project.copyWith(tracks: tracks, modifiedAt: DateTime.now());
@@ -319,6 +345,59 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     });
   }
 
+  bool moveClipToTrack(
+    String sourceTrackId,
+    String targetTrackId,
+    String clipId,
+    Duration newPosition,
+  ) {
+    final current = state;
+    if (current == null) return false;
+    AudioTrack? sourceTrack;
+    AudioTrack? targetTrack;
+    AudioClip? clip;
+    for (final track in current.project.tracks) {
+      if (track.id == sourceTrackId) sourceTrack = track;
+      if (track.id == targetTrackId) targetTrack = track;
+      for (final item in track.clips) {
+        if (item.id == clipId) clip = item;
+      }
+    }
+    if (sourceTrack == null || targetTrack == null || clip == null ||
+        sourceTrack.locked || targetTrack.locked || clip.locked) {
+      return false;
+    }
+
+    final moved = ClipEditMath.move(clip, newPosition);
+    _mutateTracks((tracks) => [
+          for (final track in tracks)
+            if (track.id == sourceTrackId && sourceTrackId == targetTrackId)
+              track.copyWith(clips: [
+                for (final item in track.clips)
+                  item.id == clipId ? moved : item,
+              ])
+            else if (track.id == sourceTrackId)
+              track.copyWith(
+                clips: track.clips.where((item) => item.id != clipId).toList(),
+              )
+            else if (track.id == targetTrackId)
+              track.copyWith(clips: [...track.clips, moved])
+            else
+              track,
+        ]);
+
+    final updated = state;
+    if (updated != null) {
+      state = updated.copyWith(
+        selectedTrackId: targetTrackId,
+        selectedClipId: clipId,
+        playhead: moved.timelinePosition,
+        seekRequestVersion: updated.seekRequestVersion + 1,
+      );
+    }
+    return true;
+  }
+
   void trimClipStart(String trackId, String clipId, Duration delta) {
     _mutateTracks((tracks) => [
           for (final t in tracks)
@@ -366,7 +445,22 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     return result;
   }
 
-  void splitAt(String trackId, String clipId, Duration absoluteTime) {
+  bool splitAt(String trackId, String clipId, Duration absoluteTime) {
+    final s = state;
+    if (s == null) return false;
+    AudioClip? target;
+    for (final track in s.project.tracks) {
+      if (track.id != trackId) continue;
+      for (final clip in track.clips) {
+        if (clip.id == clipId) target = clip;
+      }
+    }
+    if (target == null ||
+        absoluteTime <= target.timelinePosition + ClipEditMath.minClipLength ||
+        absoluteTime >= target.timelinePosition +
+            target.sourceDuration - ClipEditMath.minClipLength) {
+      return false;
+    }
     _mutateTracks((tracks) => [
           for (final t in tracks)
             t.id == trackId
@@ -374,6 +468,15 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
                     clips: _splitClipInList(t.clips, clipId, absoluteTime))
                 : t,
         ]);
+    final updated = state;
+    if (updated != null) {
+      state = updated.copyWith(
+        selectedTrackId: trackId,
+        selectedClipId: clipId,
+        playhead: absoluteTime,
+      );
+    }
+    return true;
   }
 
   void deleteClip(String trackId, String clipId) {
@@ -405,41 +508,60 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
         ]);
   }
 
-  void duplicateClip(String trackId, String clipId) {
-    _mutateTracks((tracks) {
-      return [
-        for (final t in tracks)
-          if (t.id == trackId)
-            () {
-              final clip = t.clips.firstWhere((c) => c.id == clipId);
-              final copy = clip.copyWith();
-              final duplicated = AudioClip(
-                id: IdGenerator.next(),
-                sourcePath: copy.sourcePath,
-                name: '${copy.name} copy',
-                startTime: copy.startTime,
-                endTime: copy.endTime,
-                timelinePosition: copy.timelinePosition +
-                    copy.sourceDuration +
-                    const Duration(milliseconds: 500),
-                volume: copy.volume,
-                pan: copy.pan,
-                fadeIn: copy.fadeIn,
-                fadeOut: copy.fadeOut,
-                effects: copy.effects,
-                speed: copy.speed,
-                pitchSemitones: copy.pitchSemitones,
-                muted: copy.muted,
-                locked: copy.locked,
-              );
-              return t.copyWith(clips: [...t.clips, duplicated]);
-            }()
-          else
-            t,
-      ];
-    });
-  }
+  String? duplicateClip(String trackId, String clipId) {
+    final current = state;
+    if (current == null) return null;
+    AudioClip? original;
+    for (final track in current.project.tracks) {
+      if (track.id != trackId) continue;
+      for (final clip in track.clips) {
+        if (clip.id == clipId) original = clip;
+      }
+    }
+    if (original == null) return null;
 
+    final source = original;
+    final duplicateId = IdGenerator.next();
+    final duplicatePosition = source.timelinePosition + source.sourceDuration;
+    final duplicate = source.copyWith(
+      // Keep all clip edits but make the new clip independently selectable.
+      name: '${source.name} copy',
+      timelinePosition: duplicatePosition,
+    );
+    final duplicateWithId = AudioClip(
+      id: duplicateId,
+      sourcePath: duplicate.sourcePath,
+      name: duplicate.name,
+      startTime: duplicate.startTime,
+      endTime: duplicate.endTime,
+      timelinePosition: duplicate.timelinePosition,
+      volume: duplicate.volume,
+      pan: duplicate.pan,
+      fadeIn: duplicate.fadeIn,
+      fadeOut: duplicate.fadeOut,
+      effects: duplicate.effects,
+      speed: duplicate.speed,
+      pitchSemitones: duplicate.pitchSemitones,
+      muted: duplicate.muted,
+      locked: duplicate.locked,
+    );
+
+    _mutateTracks((tracks) => [
+          for (final track in tracks)
+            track.id == trackId
+                ? track.copyWith(clips: [...track.clips, duplicateWithId])
+                : track,
+        ]);
+    final updated = state;
+    if (updated != null) {
+      state = updated.copyWith(
+        selectedTrackId: trackId,
+        selectedClipId: duplicateId,
+        playhead: duplicatePosition,
+      );
+    }
+    return duplicateId;
+  }
   void selectClip(String? trackId, String? clipId) {
     final s = state;
     if (s == null) return;
@@ -452,11 +574,21 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
   }
 
   void addTrack() {
+    final track = AudioTrack(
+      id: IdGenerator.next(),
+      name: 'Track ${(state?.project.tracks.length ?? 0) + 1}',
+    );
     _mutateTracks((tracks) => [
           ...tracks,
-          AudioTrack(
-              id: IdGenerator.next(), name: 'Track ${tracks.length + 1}'),
+          track,
         ]);
+    final updated = state;
+    if (updated != null) {
+      state = updated.copyWith(
+        selectedTrackId: track.id,
+        clearSelectedClip: true,
+      );
+    }
   }
 
   void deleteTrack(String trackId) {
@@ -514,11 +646,14 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     state = s.copyWith(tool: tool);
   }
 
-  void seek(Duration position) {
+  void seek(Duration position, {bool fromPlayback = false}) {
     final s = state;
     if (s == null) return;
-    state =
-        s.copyWith(playhead: position.isNegative ? Duration.zero : position);
+    state = s.copyWith(
+      playhead: position.isNegative ? Duration.zero : position,
+      seekRequestVersion:
+          fromPlayback ? s.seekRequestVersion : s.seekRequestVersion + 1,
+    );
   }
 
   void renameProject(String name) {
@@ -588,3 +723,5 @@ final editorProjectProvider =
     StateNotifierProvider<EditorProjectNotifier, EditorState?>(
   (ref) => EditorProjectNotifier(ref),
 );
+
+

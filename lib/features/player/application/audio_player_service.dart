@@ -14,6 +14,7 @@ class AudioPlayerService {
   Stream<Duration> get positionStream => _player.positionStream;
   Stream<PlayerState> get playerStateStream => _player.playerStateStream;
   Duration? get duration => _player.duration;
+  Duration get position => _player.position;
 
   Future<Duration?> loadFile(String path) async {
     _currentSourcePath = path;
@@ -27,6 +28,7 @@ class AudioPlayerService {
   Future<void> setVolume(double volume) =>
       _player.setVolume(volume.clamp(0.0, 1.0));
   Future<void> setSpeed(double speed) => _player.setSpeed(speed);
+  Future<void> setPitch(double pitch) => _player.setPitch(pitch);
 
   void dispose() => _player.dispose();
 }
