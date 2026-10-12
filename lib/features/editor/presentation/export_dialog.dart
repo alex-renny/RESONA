@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ffmpeg_kit_flutter_new_audio/ffmpeg_kit_config.dart';
 import '../../../../core/audio_engine/ffmpeg/encode_options.dart';
@@ -8,6 +9,7 @@ import '../../../../core/audio_engine/ffmpeg/ffmpeg_availability.dart';
 import '../../../../core/audio_engine/ffmpeg/ffmpeg_service.dart';
 import '../../../../core/audio_engine/media_store.dart';
 import '../../../../models/audio_project.dart';
+import '../../settings/application/settings_provider.dart';
 
 // ─── Export configuration types ──────────────────────────────────────────────
 
@@ -52,17 +54,25 @@ extension _ExportBitrateExt on _ExportBitrate {
   }
 }
 
-enum _SampleRate { hz22050, hz44100, hz48000 }
+enum _SampleRate { hz22050, hz32000, hz44100, hz48000, hz88200, hz96000, hz192000 }
 
 extension _SampleRateExt on _SampleRate {
   String get label {
     switch (this) {
       case _SampleRate.hz22050:
         return '22 050 Hz';
+      case _SampleRate.hz32000:
+        return '32 000 Hz';
       case _SampleRate.hz44100:
         return '44 100 Hz';
       case _SampleRate.hz48000:
         return '48 000 Hz';
+      case _SampleRate.hz88200:
+        return '88 200 Hz';
+      case _SampleRate.hz96000:
+        return '96 000 Hz';
+      case _SampleRate.hz192000:
+        return '192 000 Hz';
     }
   }
 
@@ -70,10 +80,18 @@ extension _SampleRateExt on _SampleRate {
     switch (this) {
       case _SampleRate.hz22050:
         return 22050;
+      case _SampleRate.hz32000:
+        return 32000;
       case _SampleRate.hz44100:
         return 44100;
       case _SampleRate.hz48000:
         return 48000;
+      case _SampleRate.hz88200:
+        return 88200;
+      case _SampleRate.hz96000:
+        return 96000;
+      case _SampleRate.hz192000:
+        return 192000;
     }
   }
 }
@@ -160,6 +178,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
   late final TextEditingController _filenameCtrl;
   String _outputFolder = '';
   String? _androidSafOutput;
+  String? _androidTreeUri;
 
   // ── Export state ────────────────────────────────────────────────────────────
   _ExportPhase _phase = _ExportPhase.idle;
@@ -172,8 +191,22 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     _filenameCtrl = TextEditingController(
       text: _sanitize(widget.project.name),
     );
-    _outputFolder = _defaultFolder();
+    final projectRate = widget.project.sampleRate;
+    final settings = ref.read(settingsProvider);
+    _format = _ExportFormat.values.firstWhere((f) => f.name == settings.exportFormat, orElse: () => _ExportFormat.flac);
+    _bitrate = _ExportBitrate.values.firstWhere((b) => int.parse(b.ffmpegValue.replaceAll('k', '')) == settings.exportBitrate, orElse: () => _ExportBitrate.k320);
+    _sampleRate = settings.exportSampleRate > 0
+        ? _SampleRate.values.firstWhere((r) => r.value == settings.exportSampleRate, orElse: () => _sampleFor(projectRate))
+        : _sampleFor(projectRate);
+    _channels = settings.exportStereo ? _Channels.stereo : _Channels.mono;
+    _outputFolder = settings.defaultSaveLocation ?? _defaultFolder();
+    if (Platform.isAndroid && _outputFolder.startsWith('content://')) {
+      _androidTreeUri = _outputFolder;
+    }
   }
+
+  _SampleRate _sampleFor(int rate) => _SampleRate.values.firstWhere(
+      (value) => value.value >= rate, orElse: () => _SampleRate.values.last);
 
   @override
   void dispose() {
@@ -243,6 +276,20 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
     final filename =
         '${baseName.isEmpty ? 'export' : baseName}.${_format.extension}';
     try {
+      if (_androidTreeUri != null) {
+        final documentUri = await MethodChannel('com.resona/default_save_location')
+            .invokeMethod<String>('createFile', {
+          'treeUri': _androidTreeUri,
+          'mimeType': _mimeType,
+          'fileName': filename,
+        });
+        if (documentUri == null) throw StateError('No document was created.');
+        final safOutput = await FFmpegKitConfig.getSafParameterForWrite(documentUri);
+        if (safOutput == null || safOutput.isEmpty) throw StateError('No write access.');
+        if (!mounted) return;
+        setState(() { _androidSafOutput = safOutput; _errorMessage = null; });
+        return;
+      }
       final documentUri = await FFmpegKitConfig.selectDocumentForWrite(
         filename,
         _mimeType,
@@ -555,7 +602,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
               child: Text(
                 Platform.isAndroid
                     ? (_androidSafOutput == null
-                        ? 'Choose where to save the file'
+                        ? (_androidTreeUri == null ? 'Choose where to save the file' : 'Default save folder selected')
                         : 'Destination selected for ${_filenameCtrl.text}.${_format.extension}')
                     : (_outputFolder.isEmpty ? 'No folder selected' : _outputFolder),
                 style: theme.textTheme.bodyMedium?.copyWith(
@@ -570,7 +617,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
             if (Platform.isAndroid) ...[
               const SizedBox(width: 8),
               OutlinedButton(
-                onPressed: _isExporting ? null : _chooseAndroidDestination,
+              onPressed: _isExporting ? null : _chooseAndroidDestination,
                 child: const Text('Choose…'),
               ),
             ] else ...[
@@ -618,7 +665,7 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
           onPressed: _isExporting ||
                   (!Platform.isAndroid && _outputFolder.isEmpty)
               ? null
-              : _startExport,
+                  : _startExport,
           icon: const Icon(Icons.upload_outlined, size: 18),
           label: Text(_phase == _ExportPhase.error ? 'Retry' : 'Export'),
         ),

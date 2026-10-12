@@ -19,9 +19,18 @@ class AppTheme {
   /// Resolves the [ResonaPalette] for a theme mode. Widgets that need
   /// design-system colors beyond what [ColorScheme] exposes (panel,
   /// waveform, etc.) call this instead of duplicating the dark/light choice.
-  static ResonaPalette resolvePalette(ResonaThemeMode mode, Brightness platformBrightness) {
+  static ResonaPalette resolvePalette(ResonaThemeMode mode, Brightness platformBrightness, {bool highContrast = false}) {
     final brightness = resolveBrightness(mode, platformBrightness);
-    return brightness == Brightness.dark ? ResonaPalette.dark : ResonaPalette.light;
+    final base = brightness == Brightness.dark ? ResonaPalette.dark : ResonaPalette.light;
+    if (!highContrast) return base;
+    return ResonaPalette(
+      background: base.background, surface: base.surface, panel: base.panel,
+      border: brightness == Brightness.dark ? const Color(0xFF85858D) : const Color(0xFF55555D),
+      textPrimary: brightness == Brightness.dark ? Colors.white : Colors.black,
+      textSecondary: brightness == Brightness.dark ? const Color(0xFFE0E0E5) : const Color(0xFF303038),
+      textDisabled: base.textDisabled, success: base.success, warning: base.warning,
+      danger: base.danger, waveformInactive: base.waveformInactive,
+    );
   }
 
   /// Builds a full [ThemeData] from the design-system tokens. Called from
@@ -33,6 +42,7 @@ class AppTheme {
     required ResonaDimensions dimensions,
     required double fontScale,
     required Brightness brightness,
+    bool largeTouchTargets = false,
   }) {
     final typography = ResonaTypography(palette, scale: fontScale);
     final accentColor = accent.color;
@@ -51,6 +61,10 @@ class AppTheme {
 
     return ThemeData(
       brightness: brightness,
+      visualDensity: largeTouchTargets
+          ? const VisualDensity(horizontal: 1, vertical: 1)
+          : VisualDensity.standard,
+      materialTapTargetSize: MaterialTapTargetSize.padded,
       useMaterial3: true,
       scaffoldBackgroundColor: palette.background,
       colorScheme: colorScheme,

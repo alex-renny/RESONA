@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,16 +39,31 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   late final ScrollSync _hSync;
   late final ScrollSync _vSync;
   String? _lastScrolledSelection;
+  Timer? _autoSaveTimer;
 
   @override
   void initState() {
     super.initState();
     _hSync = ScrollSync(_rulerH, _bodyH);
     _vSync = ScrollSync(_headerV, _bodyV);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scheduleAutoSave(ref.read(settingsProvider).autoSaveMinutes);
+    });
+  }
+
+  void _scheduleAutoSave(int minutes) {
+    _autoSaveTimer?.cancel();
+    if (minutes <= 0) return;
+    _autoSaveTimer = Timer.periodic(Duration(minutes: minutes), (_) async {
+      final current = ref.read(editorProjectProvider);
+      if (current == null || !current.isDirty || current.isSaving) return;
+      try { await ref.read(editorProjectProvider.notifier).save(); } catch (_) {}
+    });
   }
 
   @override
   void dispose() {
+    _autoSaveTimer?.cancel();
     _hSync.dispose();
     _vSync.dispose();
     _rulerH.dispose();
@@ -73,7 +90,8 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   Widget build(BuildContext context) {
     final editor = ref.watch(editorProjectProvider);
     final settings = ref.watch(settingsProvider);
-    final palette = AppTheme.resolvePalette(settings.themeMode, MediaQuery.platformBrightnessOf(context));
+    ref.listen(settingsProvider.select((s) => s.autoSaveMinutes), (_, next) => _scheduleAutoSave(next));
+    final palette = AppTheme.resolvePalette(settings.themeMode, MediaQuery.platformBrightnessOf(context), highContrast: settings.highContrast);
     final isEmpty = editor == null || editor.project.tracks.every((t) => t.clips.isEmpty);
 
     return Scaffold(
@@ -265,7 +283,4 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     );
   }
 }
-
-
-
 

@@ -12,6 +12,8 @@ class AppSettings {
   final double iconSize;
   final double fontScale;
   final AnimationLevel animationLevel;
+  final bool highContrast;
+  final bool largeTouchTargets;
 
   // ── Editor ────────────────────────────────────────────────────────────────
   /// Duration of the default fade-in applied to new clips.
@@ -36,7 +38,7 @@ class AppSettings {
   /// Export bit-rate in kbps (128, 192, 256, 320).
   final int exportBitrate;
 
-  /// Export sample-rate in Hz (22050, 44100, 48000).
+  /// Export sample-rate in Hz. Zero means match the project/source rate.
   final int exportSampleRate;
 
   /// true = stereo, false = mono.
@@ -49,6 +51,9 @@ class AppSettings {
   /// Maximum number of recent projects shown in the home screen.
   final int recentProjectsCount;
 
+  /// Optional persistent folder path, or Android Storage Access Framework URI.
+  final String? defaultSaveLocation;
+
   const AppSettings({
     // Appearance
     this.themeMode = ResonaThemeMode.dark,
@@ -58,6 +63,8 @@ class AppSettings {
     this.iconSize = 20,
     this.fontScale = 1.0,
     this.animationLevel = AnimationLevel.full,
+    this.highContrast = false,
+    this.largeTouchTargets = false,
     // Editor
     this.defaultFadeIn = Duration.zero,
     this.defaultFadeOut = Duration.zero,
@@ -65,13 +72,14 @@ class AppSettings {
     this.snapToGrid = true,
     this.crossfadeDuration = const Duration(seconds: 1),
     // Audio
-    this.exportFormat = 'mp3',
+    this.exportFormat = 'flac',
     this.exportBitrate = 320,
-    this.exportSampleRate = 44100,
+    this.exportSampleRate = 0,
     this.exportStereo = true,
     // Projects
     this.autoSaveMinutes = 5,
     this.recentProjectsCount = 10,
+    this.defaultSaveLocation,
   });
 
   ResonaDimensions get dimensions => ResonaDimensions(
@@ -89,6 +97,8 @@ class AppSettings {
     double? iconSize,
     double? fontScale,
     AnimationLevel? animationLevel,
+    bool? highContrast,
+    bool? largeTouchTargets,
     // Editor
     Duration? defaultFadeIn,
     Duration? defaultFadeOut,
@@ -103,6 +113,8 @@ class AppSettings {
     // Projects
     int? autoSaveMinutes,
     int? recentProjectsCount,
+    String? defaultSaveLocation,
+    bool clearDefaultSaveLocation = false,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -112,6 +124,8 @@ class AppSettings {
       iconSize: iconSize ?? this.iconSize,
       fontScale: fontScale ?? this.fontScale,
       animationLevel: animationLevel ?? this.animationLevel,
+      highContrast: highContrast ?? this.highContrast,
+      largeTouchTargets: largeTouchTargets ?? this.largeTouchTargets,
       defaultFadeIn: defaultFadeIn ?? this.defaultFadeIn,
       defaultFadeOut: defaultFadeOut ?? this.defaultFadeOut,
       defaultTransition: defaultTransition ?? this.defaultTransition,
@@ -123,6 +137,9 @@ class AppSettings {
       exportStereo: exportStereo ?? this.exportStereo,
       autoSaveMinutes: autoSaveMinutes ?? this.autoSaveMinutes,
       recentProjectsCount: recentProjectsCount ?? this.recentProjectsCount,
+      defaultSaveLocation: clearDefaultSaveLocation
+          ? null
+          : (defaultSaveLocation ?? this.defaultSaveLocation),
     );
   }
 
@@ -135,6 +152,8 @@ class AppSettings {
         'iconSize': iconSize,
         'fontScale': fontScale,
         'animationLevel': animationLevel.index,
+        'highContrast': highContrast,
+        'largeTouchTargets': largeTouchTargets,
         // Editor – store durations as milliseconds for easy JSON round-trip
         'defaultFadeInMs': defaultFadeIn.inMilliseconds,
         'defaultFadeOutMs': defaultFadeOut.inMilliseconds,
@@ -149,6 +168,7 @@ class AppSettings {
         // Projects
         'autoSaveMinutes': autoSaveMinutes,
         'recentProjectsCount': recentProjectsCount,
+        'defaultSaveLocation': defaultSaveLocation,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
@@ -160,6 +180,8 @@ class AppSettings {
         iconSize: (json['iconSize'] ?? 20).toDouble(),
         fontScale: (json['fontScale'] ?? 1.0).toDouble(),
         animationLevel: AnimationLevel.values[json['animationLevel'] ?? 0],
+        highContrast: json['highContrast'] ?? false,
+        largeTouchTargets: json['largeTouchTargets'] ?? false,
         // Editor
         defaultFadeIn: Duration(milliseconds: json['defaultFadeInMs'] ?? 0),
         defaultFadeOut: Duration(milliseconds: json['defaultFadeOutMs'] ?? 0),
@@ -167,12 +189,13 @@ class AppSettings {
         snapToGrid: json['snapToGrid'] ?? true,
         crossfadeDuration: Duration(milliseconds: json['crossfadeDurationMs'] ?? 1000),
         // Audio
-        exportFormat: json['exportFormat'] ?? 'mp3',
+        exportFormat: json['exportFormat'] ?? 'flac',
         exportBitrate: json['exportBitrate'] ?? 320,
-        exportSampleRate: json['exportSampleRate'] ?? 44100,
+        exportSampleRate: json['exportSampleRate'] ?? 0,
         exportStereo: json['exportStereo'] ?? true,
         // Projects
         autoSaveMinutes: json['autoSaveMinutes'] ?? 5,
         recentProjectsCount: json['recentProjectsCount'] ?? 10,
+        defaultSaveLocation: json['defaultSaveLocation'] as String?,
       );
 }

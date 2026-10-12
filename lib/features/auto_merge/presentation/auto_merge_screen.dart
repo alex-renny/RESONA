@@ -8,14 +8,19 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import '../../../core/audio_engine/media_store.dart';
 import '../../../core/theme/spacing.dart';
+import '../../../core/utils/time_format.dart';
+import '../../../core/utils/waveform_math.dart';
 import '../../../core/widgets/resona_card.dart';
 import '../../../core/widgets/resona_empty_state.dart';
 import '../../editor/application/editor_project_provider.dart';
+import '../../editor/application/waveform_service.dart';
 import '../../editor/presentation/export_dialog.dart';
+import '../../editor/presentation/timeline/waveform_painter.dart';
 import '../../editor/presentation/timeline/editor_toolbar.dart'
     show kSupportedAudioExtensions;
 import '../../navigation/application/shell_tab_provider.dart';
 import '../../player/application/audio_player_service.dart';
+import '../../settings/application/settings_provider.dart';
 import '../application/auto_merge_provider.dart';
 import '../domain/auto_merge_models.dart';
 import '../domain/auto_merge_validator.dart';
@@ -68,6 +73,12 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
   TransitionType _globalTransition = TransitionType.hardCut;
   double _crossfadeSeconds = 1.0;
 
+  TransitionType _transitionFromSetting(String value) => switch (value) {
+        'crossfade' => TransitionType.crossfade,
+        'fadeThroughSilence' => TransitionType.fadeThroughSilence,
+        _ => TransitionType.hardCut,
+      };
+
   Future<void> _pickFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
@@ -78,6 +89,13 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
 
     setState(() => _isImporting = true);
     final notifier = ref.read(autoMergeProvider.notifier);
+    final settings = ref.read(settingsProvider);
+    final defaultTransition = _transitionFromSetting(settings.defaultTransition);
+    final defaultCrossfade = settings.crossfadeDuration;
+    setState(() {
+      _globalTransition = defaultTransition;
+      _crossfadeSeconds = defaultCrossfade.inMilliseconds / 1000;
+    });
     for (final file in result.files) {
       final path = file.path;
       if (path == null) continue;
@@ -92,7 +110,14 @@ class _AutoMergeScreenState extends ConsumerState<AutoMergeScreen> {
         );
         continue;
       }
-      notifier.addItem(stored, duration);
+      notifier.addItem(
+        stored,
+        duration,
+        fadeIn: settings.defaultFadeIn,
+        fadeOut: settings.defaultFadeOut,
+        transition: defaultTransition,
+        crossfadeDuration: defaultCrossfade,
+      );
     }
     if (mounted) setState(() => _isImporting = false);
   }
@@ -645,21 +670,37 @@ class _AutoMergeItemCardState extends ConsumerState<_AutoMergeItemCard> {
                     ),
                     const SizedBox(width: ResonaSpacing.xs),
 
-                    // Position badge
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: ResonaSpacing.sm,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        _ordinal(item.position),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: theme.colorScheme.onPrimaryContainer,
-                          fontWeight: FontWeight.bold,
+                    // The visible position badge opens a quick reorder menu.
+                    PopupMenuButton<int>(
+                      tooltip: 'Change merge position',
+                      enabled: !widget.isProcessing && itemCount > 1,
+                      onSelected: (position) => ref
+                          .read(autoMergeProvider.notifier)
+                          .reorderItems(widget.index, position - 1),
+                      itemBuilder: (_) => [
+                        for (var position = 1;
+                            position <= itemCount;
+                            position++)
+                          PopupMenuItem(
+                            value: position,
+                            child: Text('${_ordinal(position)} in the merge'),
+                          ),
+                      ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: ResonaSpacing.sm,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '${_ordinal(item.position)}  ·  Change',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onPrimaryContainer,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
@@ -1050,10 +1091,13 @@ class _SuccessCard extends ConsumerStatefulWidget {
 class _SuccessCardState extends ConsumerState<_SuccessCard> {
   bool _isPlaying = false;
   StreamSubscription<PlayerState>? _playerSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
+  Duration _previewPosition = Duration.zero;
 
   @override
   void dispose() {
     _playerSubscription?.cancel();
+    _positionSubscription?.cancel();
     super.dispose();
   }
 
@@ -1065,13 +1109,11 @@ class _SuccessCardState extends ConsumerState<_SuccessCard> {
         if (mounted) setState(() => _isPlaying = false);
         return;
       }
-      await player.loadFile(widget.outputPath);
-      _playerSubscription?.cancel();
-      _playerSubscription = player.playerStateStream.listen((state) {
-        if (!mounted) return;
-        setState(() => _isPlaying =
-            state.playing && player.currentSourcePath == widget.outputPath);
-      });
+      if (player.currentSourcePath != widget.outputPath) {
+        await player.loadFile(widget.outputPath);
+        if (mounted) setState(() => _previewPosition = Duration.zero);
+      }
+      _watchPreviewPlayer(player);
       await player.play();
       if (mounted) setState(() => _isPlaying = true);
     } catch (_) {
@@ -1082,11 +1124,48 @@ class _SuccessCardState extends ConsumerState<_SuccessCard> {
     }
   }
 
+  void _watchPreviewPlayer(AudioPlayerService player) {
+    _playerSubscription?.cancel();
+    _playerSubscription = player.playerStateStream.listen((state) {
+      if (!mounted) return;
+      setState(() => _isPlaying =
+          state.playing && player.currentSourcePath == widget.outputPath);
+    });
+    _positionSubscription?.cancel();
+    _positionSubscription = player.positionStream.listen((position) {
+      if (!mounted || player.currentSourcePath != widget.outputPath) return;
+      setState(() => _previewPosition = position);
+    });
+  }
+
+  Future<void> _seekPreview(Duration position) async {
+    final player = ref.read(audioPlayerServiceProvider);
+    try {
+      if (player.currentSourcePath != widget.outputPath) {
+        await player.loadFile(widget.outputPath);
+        _watchPreviewPlayer(player);
+      }
+      await player.seek(position);
+      if (mounted) setState(() => _previewPosition = position);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not seek in the merged audio.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final outputPath = widget.outputPath;
     final theme = Theme.of(context);
     final fileName = outputPath.split(RegExp(r'[\\/]')).last;
+    final waveform = ref.watch(waveformProvider(outputPath));
+    final duration = waveform.valueOrNull?.duration ?? Duration.zero;
+    final durationMs = duration.inMilliseconds;
+    final positionMs = _previewPosition.inMilliseconds
+        .clamp(0, durationMs > 0 ? durationMs : 0)
+        .toDouble();
 
     return ResonaCard(
       child: Column(
@@ -1117,6 +1196,80 @@ class _SuccessCardState extends ConsumerState<_SuccessCard> {
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis),
+          const SizedBox(height: ResonaSpacing.lg),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(ResonaSpacing.md),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: theme.colorScheme.outline.withValues(alpha: 0.35),
+              ),
+            ),
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 72,
+                  width: double.infinity,
+                  child: waveform.when(
+                    loading: () => const Center(
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    error: (_, __) => Center(
+                      child: Text('Waveform preview unavailable',
+                          style: theme.textTheme.bodySmall),
+                    ),
+                    data: (data) {
+                      if (data.isEmpty) {
+                        return const Center(child: Icon(Icons.graphic_eq));
+                      }
+                      return LayoutBuilder(
+                        builder: (context, constraints) {
+                          final count = constraints.maxWidth
+                              .round()
+                              .clamp(1, 2000);
+                          final (mins, maxs) = WaveformMath.resamplePeaks(
+                            data.peaksMin,
+                            data.peaksMax,
+                            count,
+                          );
+                          return CustomPaint(
+                            size: Size(constraints.maxWidth, 72),
+                            painter: WaveformPainter(
+                              peaksMin: mins,
+                              peaksMax: maxs,
+                              color: theme.colorScheme.primary,
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                if (durationMs > 0) ...[
+                  Slider(
+                    value: positionMs,
+                    min: 0,
+                    max: durationMs.toDouble(),
+                    onChanged: (value) => _seekPreview(
+                      Duration(milliseconds: value.round()),
+                    ),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(TimeFormat.format(_previewPosition),
+                          style: theme.textTheme.labelSmall),
+                      Text(TimeFormat.format(duration),
+                          style: theme.textTheme.labelSmall),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
           const SizedBox(height: ResonaSpacing.lg),
           Wrap(
             spacing: ResonaSpacing.md,

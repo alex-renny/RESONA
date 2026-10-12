@@ -76,20 +76,26 @@ class AutoMergeNotifier extends StateNotifier<AutoMergeState> {
   ///
   /// [sourceDuration] should be pre-probed by the caller (the UI uses
   /// just_audio to probe before calling this method).
-  void addItem(String sourcePath, Duration sourceDuration) {
+  void addItem(
+    String sourcePath,
+    Duration sourceDuration, {
+    Duration fadeIn = Duration.zero,
+    Duration fadeOut = Duration.zero,
+    TransitionType transition = TransitionType.hardCut,
+    Duration crossfadeDuration = const Duration(seconds: 1),
+  }) {
     final newPosition = state.items.length + 1;
     final name = sourcePath.split(RegExp(r'[\\/]')).last;
-    final defaultFade = Duration(
-      milliseconds: (sourceDuration.inMilliseconds ~/ 4).clamp(0, 500),
-    );
     final item = AutoMergeItem(
       id: IdGenerator.next(),
       sourcePath: sourcePath,
       name: name,
       sourceDuration: sourceDuration,
       position: newPosition,
-      fadeIn: defaultFade,
-      fadeOut: defaultFade,
+      fadeIn: fadeIn > sourceDuration ? sourceDuration : fadeIn,
+      fadeOut: fadeOut > sourceDuration ? sourceDuration : fadeOut,
+      transition: transition,
+      crossfadeDuration: crossfadeDuration,
     );
     state = state.copyWith(
       items: [...state.items, item],
@@ -192,11 +198,16 @@ class AutoMergeNotifier extends StateNotifier<AutoMergeState> {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final destDir =
           outputDir.isEmpty ? (await MediaStore.exportsDir()).path : outputDir;
-      final outputPath = p.join(destDir, 'resona_merge_$timestamp.mp3');
+      final outputPath = p.join(destDir, 'resona_merge_$timestamp.flac');
 
       state = state.copyWith(
-        processingStep: 'Building timeline with FFmpeg…',
+        processingStep: 'Checking source audio quality…',
       );
+      final sourceRates = await Future.wait(state.items.map((item) async {
+        final rate = await ffmpeg.probeSampleRate(item.sourcePath);
+        return rate != null && rate >= 8000 && rate <= 192000 ? rate : 44100;
+      }));
+      final outputSampleRate = sourceRates.reduce((a, b) => a > b ? a : b);
       final clipsMaps = state.items
           .map((item) => {
                 'path': item.sourcePath,
@@ -218,6 +229,7 @@ class AutoMergeNotifier extends StateNotifier<AutoMergeState> {
         outputPath: outputPath,
         transition: firstItem.transition,
         crossfadeDuration: firstItem.crossfadeDuration,
+        sampleRate: outputSampleRate,
       );
 
       if (!result.success || result.outputPath == null) {

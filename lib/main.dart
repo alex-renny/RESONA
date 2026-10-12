@@ -4,6 +4,8 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'core/theme/app_theme.dart';
 import 'features/navigation/presentation/app_shell.dart';
 import 'features/settings/application/settings_provider.dart';
+import 'features/settings/domain/app_settings.dart';
+import 'core/theme/dimensions.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,7 +22,8 @@ class ResonaApp extends ConsumerWidget {
     final platformBrightness = MediaQuery.platformBrightnessOf(context);
 
     final resolvedBrightness = AppTheme.resolveBrightness(settings.themeMode, platformBrightness);
-    final palette = AppTheme.resolvePalette(settings.themeMode, platformBrightness);
+    final palette = AppTheme.resolvePalette(settings.themeMode, platformBrightness,
+        highContrast: settings.highContrast);
 
     return MaterialApp(
       title: 'RESONA',
@@ -32,7 +35,17 @@ class ResonaApp extends ConsumerWidget {
         dimensions: settings.dimensions,
         fontScale: settings.fontScale,
         brightness: resolvedBrightness,
+        largeTouchTargets: settings.largeTouchTargets,
       ),
+      builder: (context, child) {
+        final media = MediaQuery.of(context);
+        return MediaQuery(
+          data: media.copyWith(
+            disableAnimations: settings.animationLevel != AnimationLevel.full,
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const AppShell(),
     );
   }

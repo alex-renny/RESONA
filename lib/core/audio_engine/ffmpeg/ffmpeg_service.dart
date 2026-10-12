@@ -300,13 +300,14 @@ class FfmpegService {
     required String outputPath,
     TransitionType transition = TransitionType.hardCut,
     Duration crossfadeDuration = const Duration(seconds: 1),
+    int sampleRate = 44100,
   }) async {
     final exe = await _ffmpeg();
     if (exe == null) return FfmpegResult.failure(_notFound);
     if (clips.isEmpty) return const FfmpegResult.failure('No clips provided.');
 
-    // Single clip — trim and fade in one encode pass. Stream-copying a cut
-    // into a WAV-named temporary file would leave the container inconsistent.
+    // Single clip — trim and fade in one encode pass. Auto Merge writes FLAC
+    // so this final render does not add another lossy compression pass.
     if (clips.length == 1) {
       final clip = clips.first;
       final path = clip['path'] as String;
@@ -329,6 +330,9 @@ class FfmpegService {
             .add('afade=t=out:st=$fadeStart:d=${fo.inMilliseconds / 1000.0}');
       }
 
+      final encodeArgs = p.extension(outputPath).toLowerCase() == '.flac'
+          ? ['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '8']
+          : ['-codec:a', 'libmp3lame', '-b:a', '320k'];
       final args = <String>[
         '-y',
         '-ss',
@@ -339,13 +343,10 @@ class FfmpegService {
         path,
         if (filters.isNotEmpty) ...['-af', filters.join(',')],
         '-ar',
-        '44100',
+        '$sampleRate',
         '-ac',
         '2',
-        '-codec:a',
-        'libmp3lame',
-        '-b:a',
-        '192k',
+        ...encodeArgs,
         outputPath,
       ];
       return _run(exe, args, outputPath);
@@ -400,8 +401,8 @@ class FfmpegService {
       // imported music commonly use different sample rates and channel layouts.
       final subFilters = <String>[
         'asetpts=PTS-STARTPTS',
-        'aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo',
-        'aresample=44100',
+        'aformat=sample_fmts=fltp:sample_rates=$sampleRate:channel_layouts=stereo',
+        'aresample=$sampleRate',
       ];
 
       if (fi > Duration.zero) {
@@ -462,6 +463,9 @@ class FfmpegService {
 
     final filterComplex = filterParts.join(';');
 
+    final encodeArgs = p.extension(outputPath).toLowerCase() == '.flac'
+        ? ['-codec:a', 'flac', '-sample_fmt', 's32', '-compression_level', '8']
+        : ['-codec:a', 'libmp3lame', '-b:a', '320k'];
     final args = [
       '-y',
       ...inputArgs,
@@ -470,13 +474,10 @@ class FfmpegService {
       '-map',
       finalLabel,
       '-ar',
-      '44100',
+      '$sampleRate',
       '-ac',
       '2',
-      '-codec:a',
-      'libmp3lame',
-      '-b:a',
-      '192k',
+      ...encodeArgs,
       outputPath,
     ];
 
@@ -577,6 +578,47 @@ class FfmpegService {
       if (seconds == null) return null;
 
       return Duration(microseconds: (seconds * 1e6).round());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Reads the first audio stream's sample rate, when FFprobe can identify it.
+  Future<int?> probeSampleRate(String path) async {
+    const args = [
+      '-v',
+      'error',
+      '-select_streams',
+      'a:0',
+      '-show_entries',
+      'stream=sample_rate',
+      '-of',
+      'default=noprint_wrappers=1:nokey=1',
+    ];
+
+    if (Platform.isAndroid) {
+      try {
+        final session = await FFprobeKit.executeWithArguments([...args, path]);
+        if (!ReturnCode.isSuccess(await session.getReturnCode())) return null;
+        final output = (await session.getOutput() ?? '').trim();
+        return int.tryParse(output.split(RegExp(r'\s+')).first);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    final probe = await _ffprobe();
+    if (probe == null) return null;
+    try {
+      final result = await Process.run(
+        probe,
+        [...args, path],
+        stdoutEncoding: utf8,
+        stderrEncoding: utf8,
+      );
+      if (result.exitCode != 0) return null;
+      final output = (result.stdout as String).trim();
+      return int.tryParse(output.split(RegExp(r'\s+')).first);
     } catch (_) {
       return null;
     }

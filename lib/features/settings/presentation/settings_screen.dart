@@ -1,4 +1,8 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/color_scheme.dart';
@@ -320,7 +324,7 @@ class _AudioCard extends StatelessWidget {
       ('m4a', 'M4A'),
     ];
     const bitrates = [128, 192, 256, 320];
-    const sampleRates = [22050, 44100, 48000];
+    const sampleRates = [0, 22050, 32000, 44100, 48000, 88200, 96000, 192000];
 
     return _SettingsCard(children: [
       // Format
@@ -353,8 +357,9 @@ class _AudioCard extends StatelessWidget {
         label: 'Sample rate',
         value: settings.exportSampleRate,
         items: sampleRates
-            .map((s) =>
-                DropdownMenuItem(value: s, child: Text('${s ~/ 1000} kHz')))
+            .map((s) => DropdownMenuItem(
+                value: s,
+                child: Text(s == 0 ? 'Match source' : '${s ~/ 1000} kHz')))
             .toList(),
         onChanged: (v) =>
             notifier.update((c) => c.copyWith(exportSampleRate: v!)),
@@ -422,7 +427,93 @@ class _ProjectsCard extends StatelessWidget {
         onChanged: (v) => notifier.update(
             (c) => c.copyWith(recentProjectsCount: v.round())),
       ),
+      const _RowDivider(),
+      _DefaultSaveLocationRow(settings: settings, notifier: notifier),
     ]);
+  }
+}
+
+class _DefaultSaveLocationRow extends StatelessWidget {
+  final AppSettings settings;
+  final SettingsNotifier notifier;
+
+  const _DefaultSaveLocationRow({
+    required this.settings,
+    required this.notifier,
+  });
+
+  Future<void> _choose(BuildContext context) async {
+    try {
+      final String? location;
+      if (Platform.isAndroid) {
+        location = await MethodChannel('com.resona/default_save_location')
+            .invokeMethod<String>('chooseDirectory');
+      } else {
+        location = await FilePicker.platform.getDirectoryPath(
+          dialogTitle: 'Choose default save folder',
+          initialDirectory: settings.defaultSaveLocation,
+        );
+      }
+      if (location != null && location.isNotEmpty) {
+        notifier.update((current) =>
+            current.copyWith(defaultSaveLocation: location));
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not choose a save folder: $error')),
+      );
+    }
+  }
+
+  String _locationLabel() {
+    final value = settings.defaultSaveLocation;
+    if (value == null || value.isEmpty) return 'Use the app’s default folder';
+    if (value.startsWith('content://')) {
+      final decoded = Uri.decodeComponent(value);
+      final tree = decoded.split('/tree/').last.split('/document/').first;
+      return tree.replaceFirst(RegExp(r'^[^:]+:'), '').replaceAll('/', ' › ');
+    }
+    return value;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Default save location', style: theme.textTheme.bodyMedium),
+        const SizedBox(height: ResonaSpacing.xs),
+        Text(
+          _locationLabel(),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: ResonaSpacing.sm),
+        Wrap(
+          spacing: ResonaSpacing.sm,
+          children: [
+            OutlinedButton.icon(
+              onPressed: () => _choose(context),
+              icon: const Icon(Icons.folder_open_outlined),
+              label: const Text('Choose folder'),
+            ),
+            if (settings.defaultSaveLocation != null)
+              TextButton(
+                onPressed: () => notifier.update(
+                  (current) =>
+                      current.copyWith(clearDefaultSaveLocation: true),
+                ),
+                child: const Text('Reset'),
+              ),
+          ],
+        ),
+      ],
+    );
   }
 }
 
@@ -525,32 +616,6 @@ class _KeyboardShortcutsCard extends StatelessWidget {
         ],
       ),
       const SizedBox(height: ResonaSpacing.md),
-      Container(
-        padding: const EdgeInsets.all(ResonaSpacing.md),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.secondaryContainer
-              .withValues(alpha: 0.4),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              Icons.info_outline,
-              size: 16,
-              color: theme.colorScheme.onSecondaryContainer,
-            ),
-            const SizedBox(width: ResonaSpacing.sm),
-            Expanded(
-              child: Text(
-                'Customization coming in a later phase.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSecondaryContainer,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     ]);
   }
 }
@@ -569,26 +634,18 @@ class _AccessibilityCard extends StatelessWidget {
     final theme = Theme.of(context);
 
     return _SettingsCard(children: [
-      // High contrast – not yet implemented, grayed out
-      Opacity(
-        opacity: 0.5,
-        child: SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Row(
-            children: [
-              Text('High contrast mode', style: theme.textTheme.bodyMedium),
-              const SizedBox(width: ResonaSpacing.sm),
-              _ComingSoonBadge(),
-            ],
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text('High contrast mode', style: theme.textTheme.bodyMedium),
+        subtitle: Text(
+          'Increase contrast for better readability',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
-          subtitle: Text(
-            'Increase contrast for better readability',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          value: false,
-          onChanged: null, // disabled
+        ),
+        value: settings.highContrast,
+        onChanged: (value) => notifier.update(
+          (current) => current.copyWith(highContrast: value),
         ),
       ),
       const _RowDivider(),
@@ -611,27 +668,18 @@ class _AccessibilityCard extends StatelessWidget {
       ),
       const _RowDivider(),
 
-      // Large touch targets – not yet implemented
-      Opacity(
-        opacity: 0.5,
-        child: SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: Row(
-            children: [
-              Text('Large touch targets',
-                  style: theme.textTheme.bodyMedium),
-              const SizedBox(width: ResonaSpacing.sm),
-              _ComingSoonBadge(),
-            ],
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text('Large touch targets', style: theme.textTheme.bodyMedium),
+        subtitle: Text(
+          'Increases tap areas across all controls',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
-          subtitle: Text(
-            'Increases tap areas across all controls',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          value: false,
-          onChanged: null, // disabled
+        ),
+        value: settings.largeTouchTargets,
+        onChanged: (value) => notifier.update(
+          (current) => current.copyWith(largeTouchTargets: value),
         ),
       ),
     ]);

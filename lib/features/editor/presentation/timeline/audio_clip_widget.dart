@@ -6,6 +6,7 @@ import '../../../../core/utils/waveform_math.dart';
 import '../../../../models/audio_project.dart';
 import '../../application/editor_project_provider.dart';
 import '../../application/waveform_service.dart';
+import '../../../settings/application/settings_provider.dart';
 import '../../domain/timeline_geometry.dart';
 import '../clip_inspector.dart';
 import 'waveform_painter.dart';
@@ -46,6 +47,7 @@ class AudioClipWidget extends ConsumerWidget {
     final waveformAsync = ref.watch(waveformProvider(clip.sourcePath));
     final notifier = ref.read(editorProjectProvider.notifier);
     final editor = ref.watch(editorProjectProvider);
+    final snapToGrid = ref.watch(settingsProvider.select((settings) => settings.snapToGrid));
     final locked = track.locked || clip.locked;
     final accent = Theme.of(context).colorScheme.primary;
 
@@ -88,6 +90,7 @@ class AudioClipWidget extends ConsumerWidget {
                   track.id,
                   clip.id,
                   clip.timelinePosition + geometry.deltaPixelsToTime(d.delta.dx),
+                  snap: snapToGrid,
                 ),
         child: Container(
           decoration: BoxDecoration(

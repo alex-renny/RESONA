@@ -37,9 +37,9 @@ class AudioEncodeOptions {
       case 'mp3':
         args.addAll(['-codec:a', 'libmp3lame', '-b:a', '${bitrateKbps}k']);
       case 'wav':
-        args.addAll(['-codec:a', 'pcm_s16le']);
+        args.addAll(['-codec:a', 'pcm_s24le']);
       case 'flac':
-        args.addAll(['-codec:a', 'flac']);
+        args.addAll(['-codec:a', 'flac', '-sample_fmt', 's32']);
       case 'm4a':
         args.addAll(['-codec:a', 'aac', '-b:a', '${bitrateKbps}k', '-f', 'ipod']);
       case 'aac':

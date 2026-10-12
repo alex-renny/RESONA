@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/audio_engine/duration_probe.dart';
+import '../../../core/audio_engine/ffmpeg/ffmpeg_service.dart';
 import '../../../core/audio_engine/media_store.dart';
 import '../../../core/errors/app_exception.dart';
 import '../../../core/utils/id_generator.dart';
@@ -10,6 +11,7 @@ import '../../projects/application/projects_provider.dart';
 import '../domain/clip_edit_math.dart';
 import '../domain/timeline_geometry.dart';
 import '../domain/undo_history.dart';
+import '../../settings/application/settings_provider.dart';
 
 /// Active timeline tool. Select is the default interaction (tap to select,
 /// drag to move, edge-drag to trim); Split cuts the tapped clip at the
@@ -127,6 +129,7 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
     }
     final stored = await MediaStore.persistCopy(filePath);
     final duration = await DurationProbe.probe(stored);
+    final sampleRate = await FfmpegService().probeSampleRate(stored) ?? 44100;
     if (duration == null || duration <= Duration.zero) {
       throw const AppException(
           'The merged audio could not be opened for editing.');
@@ -157,6 +160,7 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
       createdAt: now,
       modifiedAt: now,
       tracks: [track],
+      sampleRate: sampleRate,
     );
 
     _history = UndoHistory(current: project);
@@ -227,6 +231,7 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
   /// shouldn't have to manually arrange a straightforward import). Creates a
   /// project automatically if none is open yet.
   Future<void> importFiles(List<String> paths, {String? targetTrackId}) async {
+    final settings = _ref.read(settingsProvider);
     if (state == null) newProject();
     var current = state!;
 
@@ -262,6 +267,8 @@ class EditorProjectNotifier extends StateNotifier<EditorState?> {
         startTime: Duration.zero,
         endTime: duration,
         timelinePosition: lastEnd,
+        fadeIn: settings.defaultFadeIn > duration ? duration : settings.defaultFadeIn,
+        fadeOut: settings.defaultFadeOut > duration ? duration : settings.defaultFadeOut,
       );
 
       final updatedTrack =
